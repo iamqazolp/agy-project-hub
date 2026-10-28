@@ -956,7 +956,7 @@ def sync_all_targets(
         tdir = brain_dir / sid
         if not tdir.exists():
             continue
-        tdir_norm = str(tdir).replace("\\", "/")
+        tdir_norm = str(tdir).replace("\\", "/").lstrip("/")
 
         for img_name, src_img in canonical_images.items():
             dst_img = tdir / img_name
@@ -1192,7 +1192,7 @@ def update_local_index_md_with_native_links(
     brain artifacts and full session IDs / fork telemetry.
     """
     now_str = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    brain_norm = str(primary_brain_dir).replace("\\", "/")
+    brain_norm = str(primary_brain_dir).replace("\\", "/").lstrip("/")
     viz_files = sorted(viz_dir.glob("*.html"), key=lambda p: p.name)
 
     lines = [
@@ -1400,6 +1400,22 @@ def generate_local_html_hub(
     return html_path
 
 
+def resolve_default_brain_dir(session_id: str = "") -> Path:
+    """Auto-resolve the active Antigravity brain directory across CLI and IDE data paths."""
+    candidates = [
+        Path.home() / ".gemini" / "antigravity-cli" / "brain",
+        Path.home() / ".gemini" / "antigravity" / "brain",
+    ]
+    if session_id:
+        for cand in candidates:
+            if (cand / session_id).exists():
+                return cand
+    for cand in candidates:
+        if cand.exists():
+            return cand
+    return candidates[0]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Bidirectional sync of multi-session artifacts & fork telemetry into native Antigravity brain folders & .local-notes/"
@@ -1408,8 +1424,8 @@ def main() -> None:
     parser.add_argument(
         "--brain-dir",
         type=str,
-        default=str(Path.home() / ".gemini" / "antigravity-cli" / "brain"),
-        help="Path to Antigravity brain directory",
+        default="",
+        help="Path to Antigravity brain directory (auto-detected if omitted)",
     )
     parser.add_argument(
         "--session-id",
@@ -1420,7 +1436,11 @@ def main() -> None:
     args = parser.parse_args()
 
     workspace = Path(args.workspace).resolve()
-    brain_dir = Path(args.brain_dir).resolve()
+    brain_dir = (
+        Path(args.brain_dir).expanduser().resolve()
+        if args.brain_dir
+        else resolve_default_brain_dir(args.session_id).resolve()
+    )
 
     local_notes_dir = workspace / ".local-notes"
     notes_dir = local_notes_dir / "notes"
