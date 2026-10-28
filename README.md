@@ -1,10 +1,10 @@
-# ⚡ `antigravity-session-managing` (`local-recap` Skill)
+# ⚡ `agy-project-hub` (`local-recap` Skill)
 
 A **zero-context-overhead** multi-session & fork management skill for **Google Antigravity**.
 
 When running multiple concurrent sessions and forks on the same codebase, notes and artifacts get scattered across isolated `~/.gemini/antigravity-cli/brain/<conversation-id>/` directories, and opening `.md` files outside the active session's brain folder loses Antigravity's rich native Artifact Viewer styling.
 
-`antigravity-session-managing` solves this with an out-of-context Python synchronizer (`scripts/sync_local_notes.py`) that:
+`agy-project-hub` solves this with an out-of-context Python synchronizer (`scripts/sync_local_notes.py`) that:
 1. **Syncs all Markdown notes & visual assets bidirectionally** across every session/fork of a workspace (`brain/<id>/*` $\leftrightarrow$ `<workspace>/.local-notes/notes/*`).
 2. **Registers companion `<name>.md.metadata.json` files** in every active session's `brain/<id>/` directory so every note from every sibling session opens in **Antigravity's native styled Artifact Viewer**.
 3. **Reconstructs the exact Multi-Root Session Fork Forest** and per-session telemetry (`Active Context`, `Peak Context`, `Compaction Count`, `Total Output Tokens`, `Chats & Steps`, `Start -> Last Active` local timestamps, and `Full Session UUIDs`) into `PROJECT_HUB.md`.
@@ -63,7 +63,7 @@ python scripts/sync_local_notes.py --workspace /path/to/your/project --session-i
 ## 📁 Repository Structure
 
 ```text
-antigravity-session-managing/
+agy-project-hub/
 ├── SKILL.md                      # Ultra-compact Antigravity skill definition (~22 lines)
 ├── install.py                    # Cross-platform installer to ~/.gemini/config/skills/local-recap
 ├── README.md                     # Architecture & usage guide
