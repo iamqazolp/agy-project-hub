@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import html
 import json
 import os
 import re
@@ -484,9 +485,19 @@ def scan_brain_sessions(
                                 )
                         for tc in obj.get("tool_calls") or []:
                             tname = tc.get("name", "")
-                            if tname == "write_file":
+                            if tname in {
+                                "write_file",
+                                "edit_file",
+                                "write_to_file",
+                                "replace_file_content",
+                                "multi_replace_file_content",
+                            }:
                                 args_obj = tc.get("args") or {}
-                                path_str = str(args_obj.get("Path", "")).strip('"').replace("\\", "/")
+                                path_str = (
+                                    str(args_obj.get("Path") or args_obj.get("TargetFile") or "")
+                                    .strip('"')
+                                    .replace("\\", "/")
+                                )
                                 if path_str.lower().endswith(".md"):
                                     bname = path_str.rsplit("/", 1)[-1]
                                     if bname not in {"PROJECT_HUB.md", "INDEX.md", "README.md", "SKILL.md"}:
@@ -737,18 +748,30 @@ def extract_md_sections_and_stats(content: str) -> dict[str, Any]:
     }
 
 
-def write_artifact_metadata(md_file: Path, summary: str, origin_sid: str = "") -> None:
+def write_artifact_metadata(
+    md_file: Path,
+    summary: str,
+    origin_sid: str = "",
+    updated_at_iso: str = "",
+) -> None:
     """Write companion `<name>.md.metadata.json` so Antigravity renders `md_file` natively."""
     meta_path = md_file.parent / f"{md_file.name}.metadata.json"
-    now_iso = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f0Z")
+    ts_iso = updated_at_iso or dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f0Z")
     payload: dict[str, Any] = {
         "summary": summary,
-        "updatedAt": now_iso,
+        "updatedAt": ts_iso,
         "userFacing": True,
     }
     if origin_sid:
         payload["originSession"] = origin_sid
-    meta_path.write_text(json.dumps(payload, indent=2), encoding="utf-8", newline="\n")
+    new_json = json.dumps(payload, indent=2)
+    if meta_path.exists():
+        try:
+            if meta_path.read_text(encoding="utf-8", errors="ignore").strip() == new_json.strip():
+                return
+        except Exception:
+            pass
+    meta_path.write_text(new_json, encoding="utf-8", newline="\n")
 
 
 def rewrite_md_images_for_brain_dir(md_text: str, target_brain_dir: Path) -> str:
@@ -869,6 +892,32 @@ def collect_canonical_artifacts(
     return canonical_images, canonical_mds
 
 
+def sort_canonical_docs(canonical_mds: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Deterministically sort canonical documents by category priority, newest timestamp/mtime, and filename."""
+    docs = sorted(canonical_mds.values(), key=lambda d: d["name"])
+    docs.sort(key=lambda d: (d.get("updated_str") or "", d.get("mtime") or 0.0), reverse=True)
+    docs.sort(key=lambda d: d["priority"])
+    return docs
+
+
+def _write_text_preserving_mtime(dst: Path, content: str, mtime: float | None = None) -> None:
+    """Write `content` to `dst` only if changed or missing, and preserve `mtime` when provided."""
+    changed = True
+    if dst.exists():
+        try:
+            if dst.read_text(encoding="utf-8", errors="ignore") == content:
+                changed = False
+        except Exception:
+            pass
+    if changed:
+        dst.write_text(content, encoding="utf-8", newline="\n")
+    if mtime is not None:
+        try:
+            os.utime(dst, (mtime, mtime))
+        except Exception:
+            pass
+
+
 def sync_all_targets(
     sessions: list[dict[str, Any]],
     canonical_images: dict[str, Path],
@@ -888,17 +937,12 @@ def sync_all_targets(
         if src_img.resolve() != dst_asset.resolve():
             shutil.copy2(src_img, dst_asset)
 
-    sorted_docs = sorted(
-        canonical_mds.values(),
-        key=lambda d: (d["priority"], d["updated_str"] == "", d["name"]),
-    )
-    sorted_docs.sort(key=lambda d: d["updated_str"], reverse=True)
-    sorted_docs.sort(key=lambda d: d["priority"])
+    sorted_docs = sort_canonical_docs(canonical_mds)
 
     for doc in sorted_docs:
         raw_txt = doc["path"].read_text(encoding="utf-8", errors="ignore").replace("\r\n", "\n")
         rel_txt = rewrite_markdown_image_paths_relative(raw_txt, "../assets")
-        (notes_dir / doc["name"]).write_text(rel_txt, encoding="utf-8", newline="\n")
+        _write_text_preserving_mtime(notes_dir / doc["name"], rel_txt, doc["mtime"])
 
     generated_hubs: list[Path] = []
     now_str = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -923,8 +967,11 @@ def sync_all_targets(
             dst_md = tdir / doc["name"]
             raw_txt = doc["path"].read_text(encoding="utf-8", errors="ignore").replace("\r\n", "\n")
             rewritten_txt = rewrite_md_images_for_brain_dir(raw_txt, tdir)
-            dst_md.write_text(rewritten_txt, encoding="utf-8", newline="\n")
-            write_artifact_metadata(dst_md, doc["purpose"], doc["origin_sid"])
+            _write_text_preserving_mtime(dst_md, rewritten_txt, doc["mtime"])
+            doc_iso = dt.datetime.fromtimestamp(doc["mtime"], tz=dt.timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%S.%f0Z"
+            )
+            write_artifact_metadata(dst_md, doc["purpose"], doc["origin_sid"], updated_at_iso=doc_iso)
 
         hub_lines = [
             f"# ⚡ `{workspace.name}` — Multi-Session & Fork Command Center",
@@ -1209,6 +1256,150 @@ def update_local_index_md_with_native_links(
     return index_path
 
 
+def generate_local_html_hub(
+    local_notes_dir: Path,
+    workspace: Path,
+    git_state: dict[str, Any],
+    sorted_docs: list[dict[str, Any]],
+    viz_dir: Path,
+    primary_brain_dir: Path,
+    sessions: list[dict[str, Any]],
+) -> Path:
+    """Render `<workspace>/.local-notes/index.html` using `resources/viz_template.html`."""
+    now_str = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    brain_norm = str(primary_brain_dir).replace("\\", "/").lstrip("/")
+    viz_files = sorted(viz_dir.glob("*.html"), key=lambda p: p.name)
+    template_path = Path(__file__).resolve().parent.parent / "resources" / "viz_template.html"
+    if template_path.exists():
+        tpl = template_path.read_text(encoding="utf-8", errors="ignore")
+    else:
+        tpl = (
+            "<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'/><title>{{TITLE}}</title>"
+            "<style>body{background:#0b0f17;color:#e2e8f0;font-family:sans-serif;padding:24px}"
+            ".card{background:#131a27;border:1px solid #26334d;border-radius:12px;padding:18px;margin-bottom:16px}"
+            "</style></head><body><h1>{{TITLE}}</h1><p>{{SUBTITLE}}</p><div>{{CONTENT}}</div></body></html>"
+        )
+
+    table_style = (
+        "width:100%;border-collapse:collapse;font-size:0.88rem;margin-top:8px;"
+    )
+    th_style = (
+        "text-align:left;padding:8px 10px;border-bottom:1px solid #26334d;color:#94a3b8;"
+    )
+    td_style = "padding:8px 10px;border-bottom:1px solid rgba(38,51,77,0.55);vertical-align:top;"
+    link_style = "color:#38bdf8;text-decoration:none;font-weight:600;"
+
+    doc_rows: list[str] = []
+    for doc in sorted_docs:
+        md_name = html.escape(doc["name"])
+        cat = html.escape(doc["category"])
+        upd = html.escape(doc["updated_str"])
+        purp = html.escape(doc["purpose"])
+        orig = html.escape(doc["origin_sid"])
+        native_href = f"file:///{brain_norm}/{doc['name']}"
+        local_href = f"./notes/{doc['name']}"
+        doc_rows.append(
+            f"<tr>"
+            f"<td style='{td_style}'><strong>{cat}</strong></td>"
+            f"<td style='{td_style}'><code>{upd}</code></td>"
+            f"<td style='{td_style}'><a style='{link_style}' href='{html.escape(native_href)}'>{md_name}</a> "
+            f"<span style='color:#94a3b8;font-size:0.78rem;'>(<a style='color:#94a3b8;' href='{html.escape(local_href)}'>local</a>)</span></td>"
+            f"<td style='{td_style}'>{purp}</td>"
+            f"<td style='{td_style}'><code>{orig}</code></td>"
+            f"</tr>"
+        )
+
+    sess_rows: list[str] = []
+    for s in sessions:
+        if s.get("is_subagent"):
+            agent_lbl = html.escape(s.get("agent_name") or "subagent")
+            lineage = f"🤖 Subagent (<code>{agent_lbl}</code>) of <code>{html.escape(s['parent_id'][:8])}</code>"
+        elif s["parent_id"]:
+            lineage = f"🔀 Fork of <code>{html.escape(s['parent_id'][:8])}</code> @ step {s['fork_step']}"
+        else:
+            lineage = "🌱 Root (<code>step 0</code>)"
+        title_sfx = f" — <em>{html.escape(s['title'])}</em>" if s.get("title") else ""
+        cur_ctx = html.escape(format_tokens(s["current_ctx_tokens"]))
+        peak_ctx = html.escape(format_tokens(s["peak_ctx_tokens"]))
+        step_span = s["last_step"] - s["first_step"] + 1
+        sess_rows.append(
+            f"<tr>"
+            f"<td style='{td_style}'>{lineage}{title_sfx}</td>"
+            f"<td style='{td_style}'><code>{html.escape(s['id'])}</code></td>"
+            f"<td style='{td_style}'><strong>{cur_ctx}</strong> / {peak_ctx}</td>"
+            f"<td style='{td_style}'>{s['user_chats']} chats · {step_span} steps (<code>#{s['first_step']}..#{s['last_step']}</code>)</td>"
+            f"<td style='{td_style}'><code>{html.escape(s['started_local'])}</code> &rarr; <code>{html.escape(s['last_active'])}</code></td>"
+            f"</tr>"
+        )
+
+    viz_items = "".join(
+        f"<li><a style='{link_style}' href='./viz/{html.escape(v.name)}'>{html.escape(v.stem.replace('_', ' ').title())} (<code>viz/{html.escape(v.name)}</code>)</a></li>"
+        for v in viz_files
+    ) or "<li style='color:#94a3b8;'>No custom HTML visualizations in <code>.local-notes/viz/</code> yet.</li>"
+
+    content_html = f"""
+      <div class="card" style="margin-bottom: 18px;">
+        <h2>1. Synced Project Knowledge Base ({len(sorted_docs)} Artifacts)</h2>
+        <table style="{table_style}">
+          <thead>
+            <tr>
+              <th style="{th_style}">Category</th>
+              <th style="{th_style}">Timestamp</th>
+              <th style="{th_style}">Artifact</th>
+              <th style="{th_style}">Summary &amp; Purpose</th>
+              <th style="{th_style}">Origin Session</th>
+            </tr>
+          </thead>
+          <tbody>
+            {''.join(doc_rows) or f"<tr><td colspan='5' style='{td_style}color:#94a3b8;'>No synced Markdown artifacts yet.</td></tr>"}
+          </tbody>
+        </table>
+      </div>
+      <div class="card" style="margin-bottom: 18px;">
+        <h2>2. Sessions &amp; Fork Telemetry ({len(sessions)} Sessions)</h2>
+        <table style="{table_style}">
+          <thead>
+            <tr>
+              <th style="{th_style}">Lineage &amp; Title</th>
+              <th style="{th_style}">Full Session ID</th>
+              <th style="{th_style}">Context (Active / Peak)</th>
+              <th style="{th_style}">Chats &amp; Steps</th>
+              <th style="{th_style}">Active Window</th>
+            </tr>
+          </thead>
+          <tbody>
+            {''.join(sess_rows) or f"<tr><td colspan='5' style='{td_style}color:#94a3b8;'>No matching sessions found.</td></tr>"}
+          </tbody>
+        </table>
+      </div>
+      <div class="grid">
+        <div class="card">
+          <h2>3. Custom HTML Visualizations (<code>viz/</code>)</h2>
+          <ul style="margin:0;padding-left:20px;">{viz_items}</ul>
+        </div>
+        <div class="card">
+          <h2>4. Git State (<code>{html.escape(git_state['current_branch'])}</code>)</h2>
+          <pre>{html.escape(git_state['status'] or 'Working tree clean')}</pre>
+        </div>
+      </div>
+    """
+
+    rendered = (
+        tpl.replace("{{TITLE}}", html.escape(f"{workspace.name} — Project Hub"))
+        .replace(
+            "{{SUBTITLE}}",
+            html.escape(
+                f"Synced {now_str} · {len(sorted_docs)} Artifacts · {len(sessions)} Sessions/Forks"
+            ),
+        )
+        .replace("{{META_BADGE}}", html.escape(f"branch: {git_state['current_branch']}"))
+        .replace("{{CONTENT}}", content_html)
+    )
+    html_path = local_notes_dir / "index.html"
+    html_path.write_text(rendered, encoding="utf-8", newline="\n")
+    return html_path
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Bidirectional sync of multi-session artifacts & fork telemetry into native Antigravity brain folders & .local-notes/"
@@ -1252,12 +1443,7 @@ def main() -> None:
     canonical_images, canonical_mds = collect_canonical_artifacts(
         sessions, origin_map, authored_ts_map, notes_dir, assets_dir, workspace
     )
-    sorted_docs = sorted(
-        canonical_mds.values(),
-        key=lambda d: (d["priority"], d["updated_str"] == "", d["name"]),
-    )
-    sorted_docs.sort(key=lambda d: d["updated_str"], reverse=True)
-    sorted_docs.sort(key=lambda d: d["priority"])
+    sorted_docs = sort_canonical_docs(canonical_mds)
 
     hubs = sync_all_targets(
         sessions,
@@ -1274,6 +1460,9 @@ def main() -> None:
     if target_sids:
         primary_brain = brain_dir / (args.session_id or target_sids[0])
         update_local_index_md_with_native_links(
+            local_notes_dir, workspace, git_state, sorted_docs, viz_dir, primary_brain, sessions
+        )
+        generate_local_html_hub(
             local_notes_dir, workspace, git_state, sorted_docs, viz_dir, primary_brain, sessions
         )
 
