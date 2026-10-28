@@ -26,10 +26,13 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import re
 import shutil
 import sqlite3
 import subprocess
+import sys
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -90,15 +93,80 @@ def parse_parent_reference_blob(blob: bytes) -> tuple[str, int | None]:
     return parent_sid, fork_step
 
 
+def _normalize_workspace_variants(raw_uri_or_path: str | Path) -> set[str]:
+    """Normalize a filesystem path or `file://` URI into lowercase forward-slash path variants
+    (including both symlink path and resolved target path when present on disk).
+    """
+    text = urllib.parse.unquote(str(raw_uri_or_path or "").strip()).strip("\"'")
+    if not text:
+        return set()
+    if text.lower().startswith("file://"):
+        text = text[7:]
+        if re.match(r"^/[a-zA-Z]:/", text):
+            text = text[1:]
+    norm = text.replace("\\", "/").rstrip("/").lower()
+    if not norm:
+        return set()
+    variants = {norm}
+    try:
+        p = Path(text)
+        if p.exists():
+            variants.add(str(p.resolve()).replace("\\", "/").rstrip("/").lower())
+    except Exception:
+        pass
+    return variants
+
+
+def _parse_workspace_uris(raw_ws_uris: str) -> set[str]:
+    """Extract normalized workspace path variants from `conversation_summaries.workspace_uris`."""
+    if not raw_ws_uris or not raw_ws_uris.strip():
+        return set()
+    paths: set[str] = set()
+    try:
+        parsed = json.loads(raw_ws_uris)
+        if isinstance(parsed, list):
+            for item in parsed:
+                if isinstance(item, str):
+                    paths.update(_normalize_workspace_variants(item))
+        elif isinstance(parsed, str):
+            paths.update(_normalize_workspace_variants(parsed))
+    except Exception:
+        for m in re.findall(r'file://[^\s"\'\],]+', raw_ws_uris):
+            paths.update(_normalize_workspace_variants(m))
+    return paths
+
+
 def query_antigravity_sqlite_metadata(
     ag_dir: Path, workspace: Path
 ) -> dict[str, dict[str, Any]]:
     """Read ground-truth workspace matching, titles, and exact fork lineage from Antigravity's
-    SQLite databases (`conversation_summaries.db` and `conversations/<id>.db`).
+    SQLite databases (`conversation_summaries.db` and `conversations/<id>.db`), `history.jsonl`,
+    and `annotations/<id>.pbtxt`.
     """
     meta: dict[str, dict[str, Any]] = {}
-    ws_norm = str(workspace).replace("\\", "/").lower()
-    ws_name = workspace.name.lower()
+    ws_variants = _normalize_workspace_variants(workspace)
+
+    history_workspaces: dict[str, set[str]] = {}
+    history_file = ag_dir / "history.jsonl"
+    if history_file.exists():
+        try:
+            for line in history_file.read_text(encoding="utf-8", errors="ignore").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    hobj = json.loads(line)
+                except Exception:
+                    continue
+                if hobj.get("type") == "slash_command":
+                    continue
+                h_cid = str(hobj.get("conversationId") or "").strip()
+                h_ws = str(hobj.get("workspace") or "").strip()
+                if h_cid and h_ws:
+                    history_workspaces.setdefault(h_cid, set()).update(
+                        _normalize_workspace_variants(h_ws)
+                    )
+        except Exception:
+            pass
 
     summaries_db = ag_dir / "conversation_summaries.db"
     if summaries_db.exists():
@@ -109,24 +177,60 @@ def query_antigravity_sqlite_metadata(
                 "FROM conversation_summaries"
             ).fetchall()
             for cid, title, step_count, ws_uris, parent_cid in rows:
-                uris_low = (ws_uris or "").replace("\\", "/").lower()
-                if ws_norm in uris_low or ws_name in uris_low:
-                    meta[cid] = {
-                        "matched_workspace": True,
-                        "title": (title or "").strip(),
-                        "db_step_count": int(step_count or 0),
-                        "subagent_parent_id": (parent_cid or "").strip(),
-                        "ancestry": [],
-                    }
+                db_paths = _parse_workspace_uris(ws_uris or "")
+                cid_paths = db_paths if db_paths else history_workspaces.get(cid, set())
+                matched_ws = bool(cid_paths & ws_variants)
+                known_other = bool(cid_paths) and not matched_ws
+                clean_title = (title or "").strip()
+                if not clean_title:
+                    ann_file = ag_dir / "annotations" / f"{cid}.pbtxt"
+                    if ann_file.exists():
+                        m_title = re.search(
+                            r'title:\s*"([^"]+)"',
+                            ann_file.read_text(encoding="utf-8", errors="ignore"),
+                        )
+                        if m_title:
+                            clean_title = m_title.group(1).strip()
+                meta[cid] = {
+                    "matched_workspace": matched_ws,
+                    "known_other_workspace": known_other,
+                    "title": clean_title,
+                    "db_step_count": int(step_count or 0),
+                    "subagent_parent_id": (parent_cid or "").strip(),
+                    "ancestry": [],
+                }
             conn.close()
         except Exception:
             pass
+
+    for h_cid, h_paths in history_workspaces.items():
+        if h_cid not in meta:
+            matched_ws = bool(h_paths & ws_variants)
+            meta[h_cid] = {
+                "matched_workspace": matched_ws,
+                "known_other_workspace": bool(h_paths) and not matched_ws,
+                "title": "",
+                "db_step_count": 0,
+                "subagent_parent_id": "",
+                "ancestry": [],
+            }
+
+    # Propagate workspace membership to subagents whose parent session belongs to this workspace
+    for info in meta.values():
+        spid = info.get("subagent_parent_id") or ""
+        if spid and spid in meta:
+            if meta[spid]["matched_workspace"]:
+                info["matched_workspace"] = True
+                info["known_other_workspace"] = False
+            elif meta[spid]["known_other_workspace"]:
+                info["matched_workspace"] = False
+                info["known_other_workspace"] = True
 
     conv_dir = ag_dir / "conversations"
     if conv_dir.exists():
         for db_file in conv_dir.glob("*.db"):
             cid = db_file.stem
-            if cid not in meta:
+            if cid not in meta or not meta[cid].get("matched_workspace"):
                 continue
             try:
                 conn = sqlite3.connect(f"file:{db_file}?mode=ro", uri=True)
@@ -261,8 +365,14 @@ def scan_brain_sessions(
     if not brain_dir.exists():
         return [], {}, {}
     ws_name = workspace.name.lower()
-    ws_norm = str(workspace).replace("\\", "/").lower()
+    ws_variants = _normalize_workspace_variants(workspace)
     sqlite_meta = query_antigravity_sqlite_metadata(brain_dir.parent, workspace)
+    has_sqlite_db = (brain_dir.parent / "conversation_summaries.db").exists()
+    ws_path_patterns = [
+        re.compile(rf"(?<![a-z0-9_/-]){re.escape(v)}(?![a-z0-9_/-])")
+        for v in ws_variants
+    ]
+    ws_seg_pattern = re.compile(rf"/{re.escape(ws_name)}(?:/|[\"\'\s]|$)")
     sessions: list[dict[str, Any]] = []
     origin_map: dict[str, tuple[str, str]] = {}  # md_name -> (earliest_ts, session_id)
     latest_write_ts: dict[str, str] = {}  # md_name -> latest write_file ISO timestamp
@@ -272,6 +382,8 @@ def scan_brain_sessions(
             continue
         cid = conv_dir.name
         db_info = sqlite_meta.get(cid, {})
+        if db_info.get("known_other_workspace", False):
+            continue
         transcript = conv_dir / ".system_generated" / "logs" / "transcript.jsonl"
         top_files = [
             p
@@ -298,21 +410,20 @@ def scan_brain_sessions(
         prev_ctx = 0
         raw_head_snippet = ""
 
-        for f in top_files:
-            if f.suffix.lower() == ".md":
-                try:
-                    txt = f.read_text(encoding="utf-8", errors="ignore").lower()
-                    if ws_name in txt or ws_norm in txt:
-                        matched = True
-                except Exception:
-                    pass
-
         if transcript.exists():
             try:
                 raw_text = transcript.read_text(encoding="utf-8", errors="ignore")
                 raw_head_snippet = raw_text[:12000]
-                if ws_name in raw_text.lower() or ws_norm in raw_text.lower():
-                    matched = True
+                if not matched:
+                    head_low = raw_head_snippet.replace("\\", "/").lower()
+                    if any(pat.search(head_low) for pat in ws_path_patterns):
+                        matched = True
+                    elif not has_sqlite_db:
+                        full_low = raw_text.replace("\\", "/").lower()
+                        if any(pat.search(full_low) for pat in ws_path_patterns) or ws_seg_pattern.search(
+                            full_low
+                        ):
+                            matched = True
                 if matched:
                     for line in raw_text.splitlines():
                         if not line.strip():
