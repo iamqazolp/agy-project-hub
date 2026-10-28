@@ -173,10 +173,10 @@ def query_antigravity_sqlite_metadata(
         try:
             conn = sqlite3.connect(f"file:{summaries_db}?mode=ro", uri=True)
             rows = conn.execute(
-                "SELECT conversation_id, title, step_count, workspace_uris, parent_conversation_id "
-                "FROM conversation_summaries"
+                "SELECT conversation_id, title, step_count, workspace_uris, parent_conversation_id, "
+                "agent_name, nesting_depth FROM conversation_summaries"
             ).fetchall()
-            for cid, title, step_count, ws_uris, parent_cid in rows:
+            for cid, title, step_count, ws_uris, parent_cid, agent_name, nesting_depth in rows:
                 db_paths = _parse_workspace_uris(ws_uris or "")
                 cid_paths = db_paths if db_paths else history_workspaces.get(cid, set())
                 matched_ws = bool(cid_paths & ws_variants)
@@ -197,6 +197,8 @@ def query_antigravity_sqlite_metadata(
                     "title": clean_title,
                     "db_step_count": int(step_count or 0),
                     "subagent_parent_id": (parent_cid or "").strip(),
+                    "agent_name": (agent_name or "").strip(),
+                    "nesting_depth": int(nesting_depth or 0),
                     "ancestry": [],
                 }
             conn.close()
@@ -212,19 +214,22 @@ def query_antigravity_sqlite_metadata(
                 "title": "",
                 "db_step_count": 0,
                 "subagent_parent_id": "",
+                "agent_name": "",
+                "nesting_depth": 0,
                 "ancestry": [],
             }
 
     # Propagate workspace membership to subagents whose parent session belongs to this workspace
-    for info in meta.values():
-        spid = info.get("subagent_parent_id") or ""
-        if spid and spid in meta:
-            if meta[spid]["matched_workspace"]:
-                info["matched_workspace"] = True
-                info["known_other_workspace"] = False
-            elif meta[spid]["known_other_workspace"]:
-                info["matched_workspace"] = False
-                info["known_other_workspace"] = True
+    for _ in range(3):
+        for info in meta.values():
+            spid = info.get("subagent_parent_id") or ""
+            if spid and spid in meta:
+                if meta[spid]["matched_workspace"]:
+                    info["matched_workspace"] = True
+                    info["known_other_workspace"] = False
+                elif meta[spid]["known_other_workspace"]:
+                    info["matched_workspace"] = False
+                    info["known_other_workspace"] = True
 
     conv_dir = ag_dir / "conversations"
     if conv_dir.exists():
@@ -357,11 +362,13 @@ def format_tokens(n: int) -> str:
 
 
 def scan_brain_sessions(
-    brain_dir: Path, workspace: Path
+    brain_dir: Path | str, workspace: Path | str
 ) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, str]]:
     """Scan all `brain/*` directories for sessions matching `workspace`, extract full telemetry
     (context tokens, chat counts, step indices, timestamps), and reconstruct the Multi-Root Fork Forest.
     """
+    brain_dir = Path(brain_dir)
+    workspace = Path(workspace)
     if not brain_dir.exists():
         return [], {}, {}
     ws_name = workspace.name.lower()
@@ -369,7 +376,7 @@ def scan_brain_sessions(
     sqlite_meta = query_antigravity_sqlite_metadata(brain_dir.parent, workspace)
     has_sqlite_db = (brain_dir.parent / "conversation_summaries.db").exists()
     ws_path_patterns = [
-        re.compile(rf"(?<![a-z0-9_/-]){re.escape(v)}(?![a-z0-9_/-])")
+        re.compile(rf"(?<![a-z0-9_/-]){re.escape(v)}(?![a-z0-9_.-])")
         for v in ws_variants
     ]
     ws_seg_pattern = re.compile(rf"/{re.escape(ws_name)}(?:/|[\"\'\s]|$)")
@@ -408,6 +415,7 @@ def scan_brain_sessions(
         total_output_tokens = 0
         compaction_count = 0
         prev_ctx = 0
+        last_known_end_tokens = 0
         raw_head_snippet = ""
 
         if transcript.exists():
@@ -453,14 +461,15 @@ def scan_brain_sessions(
                         if ctx_tok > 0:
                             if first_planner_ctx_tokens == 0:
                                 first_planner_ctx_tokens = ctx_tok
-                            if isinstance(s_idx, int):
-                                step_end_tokens[s_idx] = ctx_tok + out_tok
+                            last_known_end_tokens = ctx_tok + out_tok
                             if prev_ctx > 60000 and ctx_tok < prev_ctx * 0.5:
                                 compaction_count += 1
                             prev_ctx = ctx_tok
                             current_ctx_tokens = ctx_tok
                             if ctx_tok > peak_ctx_tokens:
                                 peak_ctx_tokens = ctx_tok
+                        if isinstance(s_idx, int) and last_known_end_tokens > 0:
+                            step_end_tokens[s_idx] = last_known_end_tokens
 
                         if obj.get("type") == "USER_INPUT" and obj.get("content"):
                             user_chat_count += 1
@@ -522,6 +531,12 @@ def scan_brain_sessions(
                     "authored_docs": sorted(authored_docs),
                     "raw_head_snippet": raw_head_snippet,
                     "db_ancestry": db_info.get("ancestry") or [],
+                    "subagent_parent_id": db_info.get("subagent_parent_id") or "",
+                    "agent_name": db_info.get("agent_name") or "",
+                    "nesting_depth": int(db_info.get("nesting_depth") or 0),
+                    "is_subagent": bool(
+                        db_info.get("subagent_parent_id") or int(db_info.get("nesting_depth") or 0) > 0
+                    ),
                     "parent_id": None,
                     "root_id": cid,
                     "fork_depth": 0,
@@ -530,10 +545,27 @@ def scan_brain_sessions(
                 }
             )
 
-    # Reconstruct Multi-Root Fork Forest (`parent_id`, `root_id`, `fork_depth`, `fork_step`)
+    # Reconstruct Multi-Root Fork & Subagent Forest (`parent_id`, `root_id`, `fork_depth`, `fork_step`)
     sess_by_id = {s["id"]: s for s in sessions}
     all_ids = list(sess_by_id.keys())
     for s in sessions:
+        spid = s.get("subagent_parent_id") or ""
+        if spid:
+            s["parent_id"] = spid
+            s["is_subagent"] = True
+            s["fork_depth"] = max(1, int(s.get("nesting_depth") or 1))
+            s["lineage_source"] = "sqlite_subagent_parent"
+            parent_obj = sess_by_id.get(spid)
+            if parent_obj and s["first_ts_iso"]:
+                prior_steps = [
+                    st_idx
+                    for st_idx, st_ts in parent_obj["step_timestamps"].items()
+                    if st_ts <= s["first_ts_iso"]
+                ]
+                if prior_steps:
+                    s["fork_step"] = max(prior_steps)
+            continue
+
         ancestry = s.get("db_ancestry") or []
         fstep = s["first_step"]
 
@@ -575,18 +607,20 @@ def scan_brain_sessions(
         if best_parent is None:
             scored_candidates = []
             child_open_ctx = s["first_planner_ctx_tokens"]
+            max_allowed_diff = max(16000, int(child_open_ctx * 0.35)) if child_open_ctx > 0 else 999999999
             for cand in sessions:
-                if cand["id"] == s["id"]:
+                if cand["id"] == s["id"] or cand.get("is_subagent"):
                     continue
                 if cand["first_step"] <= fork_point <= cand["last_step"]:
                     step_ts = cand["step_timestamps"].get(fork_point, cand["first_ts_iso"])
                     if step_ts <= s["first_ts_iso"]:
                         parent_end_tok = cand["step_end_tokens"].get(fork_point, 0)
-                        tok_diff = (
-                            abs(child_open_ctx - parent_end_tok)
-                            if (child_open_ctx > 0 and parent_end_tok > 0)
-                            else 999999999
-                        )
+                        if child_open_ctx > 0 and parent_end_tok > 0:
+                            tok_diff = abs(child_open_ctx - parent_end_tok)
+                            if tok_diff > max_allowed_diff:
+                                continue
+                        else:
+                            tok_diff = 999999999
                         scored_candidates.append((tok_diff, -cand["first_step"], step_ts, cand["id"]))
             if scored_candidates:
                 scored_candidates.sort(key=lambda x: (x[0], x[1]))
@@ -595,9 +629,9 @@ def scan_brain_sessions(
 
         s["parent_id"] = best_parent
 
-    # Resolve `root_id` and `fork_depth` for any fallback-matched sessions & assign Root Tree numbers
+    # Resolve `root_id` and `fork_depth` for any fallback-matched or subagent sessions & assign Root Tree numbers
     for s in sessions:
-        if s["parent_id"] and s["fork_depth"] == 0:
+        if s["parent_id"]:
             depth = 0
             cur = s["parent_id"]
             visited = {s["id"]}
@@ -610,7 +644,8 @@ def scan_brain_sessions(
                 else:
                     break
             s["root_id"] = cur or s["id"]
-            s["fork_depth"] = depth
+            if s["fork_depth"] == 0:
+                s["fork_depth"] = depth
 
     # Number Root Trees chronologically (`Root Tree #1`, `Root Tree #2`, ...)
     root_sessions = sorted(
@@ -939,7 +974,14 @@ def sync_all_targets(
             f_depth = s.get("fork_depth", 0)
             title_tag = f" *({s['title']})*" if s.get("title") else ""
             is_cur = " **(CURRENT)**" if s_id == sid else ""
-            if s["parent_id"]:
+            if s.get("is_subagent"):
+                agent_lbl = s.get("agent_name") or "subagent"
+                at_step = f" @ `step {s['fork_step']}`" if s.get("fork_step") is not None else ""
+                lineage = (
+                    f"`Tree #{t_num}` · 🤖 **Subagent (`{agent_lbl}`, d={f_depth})** of "
+                    f"`{s['parent_id'][:8]}`{at_step}{title_tag}{is_cur}"
+                )
+            elif s["parent_id"]:
                 lineage = (
                     f"`Tree #{t_num}` · 🔀 **Fork (d={f_depth})** of `{s['parent_id'][:8]}` "
                     f"@ `step {s['fork_step']}`{title_tag}{is_cur}"
@@ -996,7 +1038,13 @@ def sync_all_targets(
                 ctx_lbl = format_tokens(s["current_ctx_tokens"])
                 peak_lbl = format_tokens(s["peak_ctx_tokens"])
                 f_depth = s.get("fork_depth", 0)
-                role_lbl = "Root" if not s["parent_id"] else f"Fork d={f_depth} @{s['fork_step']}"
+                if s.get("is_subagent"):
+                    agent_lbl = s.get("agent_name") or "subagent"
+                    role_lbl = f"Subagent {agent_lbl}"
+                elif s["parent_id"]:
+                    role_lbl = f"Fork d={f_depth} @{s['fork_step']}"
+                else:
+                    role_lbl = "Root"
                 u_chats = s["user_chats"]
                 f_step = s["first_step"]
                 l_step = s["last_step"]
@@ -1008,7 +1056,12 @@ def sync_all_targets(
                 if s["parent_id"] and s["parent_id"] in session_num_map:
                     pnum = session_num_map[s["parent_id"]]
                     fk_step = s["fork_step"]
-                    hub_lines.append(f'        N{pnum} -- "forked @ step {fk_step}" --> N{num}')
+                    if s.get("is_subagent"):
+                        agent_lbl = s.get("agent_name") or "subagent"
+                        edge_lbl = f"subagent ({agent_lbl})" + (f" @ step {fk_step}" if fk_step is not None else "")
+                    else:
+                        edge_lbl = f"forked @ step {fk_step}"
+                    hub_lines.append(f'        N{pnum} -- "{edge_lbl}" --> N{num}')
             hub_lines.append("    end")
 
         hub_lines.extend(
@@ -1024,11 +1077,15 @@ def sync_all_targets(
         for s in sessions:
             s_id = s["id"]
             is_cur_badge = " *(Current Session)*" if s_id == sid else ""
-            role_badge = (
-                f"Fork of `{s['parent_id']}` @ step `{s['fork_step']}`"
-                if s["parent_id"]
-                else "Root Session (`step 0`)"
-            )
+            if s.get("is_subagent"):
+                agent_lbl = s.get("agent_name") or "subagent"
+                role_badge = f"Subagent (`{agent_lbl}`) of `{s['parent_id']}`" + (
+                    f" @ step `{s['fork_step']}`" if s.get("fork_step") is not None else ""
+                )
+            elif s["parent_id"]:
+                role_badge = f"Fork of `{s['parent_id']}` @ step `{s['fork_step']}`"
+            else:
+                role_badge = "Root Session (`step 0`)"
             hub_lines.append(
                 f"### [`{s_id}`](conversation://{s_id}){is_cur_badge}"
             )
@@ -1122,11 +1179,13 @@ def update_local_index_md_with_native_links(
         ]
     )
     for s in sessions:
-        lineage = (
-            f"🔀 Fork of `{s['parent_id'][:8]}` @ `step {s['fork_step']}`"
-            if s["parent_id"]
-            else "🌱 Root (`step 0`)"
-        )
+        if s.get("is_subagent"):
+            agent_lbl = s.get("agent_name") or "subagent"
+            lineage = f"🤖 Subagent (`{agent_lbl}`) of `{s['parent_id'][:8]}`"
+        elif s["parent_id"]:
+            lineage = f"🔀 Fork of `{s['parent_id'][:8]}` @ `step {s['fork_step']}`"
+        else:
+            lineage = "🌱 Root (`step 0`)"
         cur_ctx = format_tokens(s["current_ctx_tokens"])
         peak_ctx = format_tokens(s["peak_ctx_tokens"])
         step_span = s["last_step"] - s["first_step"] + 1
@@ -1184,7 +1243,9 @@ def main() -> None:
     git_state = collect_git_state(workspace)
     sessions, origin_map, authored_ts_map = scan_brain_sessions(brain_dir, workspace)
 
-    target_sids = [s["id"] for s in sessions]
+    target_sids = [s["id"] for s in sessions if not s.get("is_subagent")]
+    if not target_sids:
+        target_sids = [s["id"] for s in sessions]
     if args.session_id and args.session_id not in target_sids:
         target_sids.insert(0, args.session_id)
 
