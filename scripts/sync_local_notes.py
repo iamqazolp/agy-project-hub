@@ -1388,8 +1388,8 @@ def run_sync(
 
 
 def run_from_hook(hook_event: str) -> None:
-    """Handle Antigravity `PostToolUse` and `Stop` lifecycle hooks to keep `PROJECT_HUB.md`
-    and `.local-notes/` shortcuts automatically updated whenever brain artifacts change.
+    """Handle Antigravity `PostInvocation`, `PostToolUse`, and `Stop` lifecycle hooks to keep
+    `PROJECT_HUB.md` and `.local-notes/` shortcuts continuously updated with 0 LLM context cost.
     """
     try:
         raw_stdin = sys.stdin.read().strip()
@@ -1412,6 +1412,12 @@ def run_from_hook(hook_event: str) -> None:
         else:
             brain_dir = resolve_default_brain_dir(conv_id).resolve()
 
+        has_hub_or_local_notes = (
+            (workspace / ".local-notes").exists()
+            or (workspace / ".git").exists()
+            or bool(conv_id and (brain_dir / conv_id / "PROJECT_HUB.md").exists())
+        )
+
         should_sync = False
         if hook_event == "post_tool":
             tool_call = payload.get("toolCall") or {}
@@ -1428,14 +1434,29 @@ def run_from_hook(hook_event: str) -> None:
                 and not low_target.endswith("/project_hub.md")
             ):
                 should_sync = True
-        elif hook_event == "stop":
-            if (workspace / ".local-notes").exists() or (
-                conv_id and (brain_dir / conv_id / "PROJECT_HUB.md").exists()
-            ):
+        elif hook_event in {"post_invocation", "stop"}:
+            if has_hub_or_local_notes:
                 should_sync = True
 
         if should_sync:
-            run_sync(workspace, brain_dir, session_id=conv_id, quiet=True)
+            cmd = [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "--workspace",
+                str(workspace),
+                "--brain-dir",
+                str(brain_dir),
+                "--quiet",
+            ]
+            if conv_id:
+                cmd.extend(["--session-id", conv_id])
+            subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
     except Exception:
         pass
 
@@ -1464,11 +1485,16 @@ def main() -> None:
         help="Optional current conversation ID; syncs into all matched sessions for this workspace.",
     )
     parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress stdout progress output (used by background hook sync)",
+    )
+    parser.add_argument(
         "--from-hook",
         type=str,
-        choices=["post_tool", "stop"],
+        choices=["post_invocation", "post_tool", "stop"],
         default="",
-        help="Internal lifecycle hook mode ('post_tool' or 'stop')",
+        help="Internal lifecycle hook mode ('post_invocation', 'post_tool', or 'stop')",
     )
     args = parser.parse_args()
 
@@ -1482,7 +1508,7 @@ def main() -> None:
         if args.brain_dir
         else resolve_default_brain_dir(args.session_id).resolve()
     )
-    run_sync(workspace, brain_dir, session_id=args.session_id, quiet=False)
+    run_sync(workspace, brain_dir, session_id=args.session_id, quiet=args.quiet)
 
 
 if __name__ == "__main__":

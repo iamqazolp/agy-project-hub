@@ -25,6 +25,13 @@ def register_lifecycle_hooks(config_root: Path, py_cmd: str, installed_script: P
 
     hooks_data["local-recap-auto-sync"] = {
         "enabled": True,
+        "PostInvocation": [
+            {
+                "type": "command",
+                "command": f'{py_cmd} "{installed_script}" --from-hook post_invocation',
+                "timeout": 10,
+            }
+        ],
         "PostToolUse": [
             {
                 "matcher": "write_file|edit_file|write_to_file|replace_file_content|multi_replace_file_content",
@@ -32,7 +39,7 @@ def register_lifecycle_hooks(config_root: Path, py_cmd: str, installed_script: P
                     {
                         "type": "command",
                         "command": f'{py_cmd} "{installed_script}" --from-hook post_tool',
-                        "timeout": 15,
+                        "timeout": 10,
                     }
                 ],
             }
@@ -41,7 +48,7 @@ def register_lifecycle_hooks(config_root: Path, py_cmd: str, installed_script: P
             {
                 "type": "command",
                 "command": f'{py_cmd} "{installed_script}" --from-hook stop',
-                "timeout": 15,
+                "timeout": 10,
             }
         ],
     }
