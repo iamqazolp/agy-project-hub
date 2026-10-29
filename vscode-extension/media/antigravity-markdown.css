@@ -1,0 +1,654 @@
+/* ==========================================================================
+   Antigravity Markdown Review — Core Stylesheet
+   Applies Google Antigravity Artifact Viewer styling to:
+   1. Antigravity Markdown Review Custom Editor (body.agy-review-body)
+   2. VS Code Built-in Markdown Preview (body.vscode-body)
+   3. Markdown Preview Enhanced (.markdown-preview.markdown-preview)
+   ========================================================================== */
+
+:root,
+body.vscode-dark,
+body.vscode-high-contrast,
+body.agy-review-body,
+.markdown-preview.markdown-preview {
+  --agy-bg: var(--vscode-editor-background, #18181b);
+  --agy-surface: #18181b;
+  --agy-fg: #f4f4f5;
+  --agy-heading: #fafafa;
+  --agy-muted: #27272a;
+  --agy-muted-fg: #a1a1aa;
+  --agy-secondary: #24252a;
+  --agy-border: #3f3f46;
+  --agy-table-border: rgba(161, 161, 170, 0.22);
+  --agy-link: #6a9fcb;
+  --agy-link-hover: #8ab8df;
+  --agy-code-fg: #e6db74;
+  --agy-code-header-bg: rgba(0, 0, 0, 0.28);
+  --agy-alert-note: #58a6ff;
+  --agy-alert-tip: #3fb950;
+  --agy-alert-important: #a371f7;
+  --agy-alert-warning: #d29922;
+  --agy-alert-caution: #f85149;
+  --agy-font-sans: var(--vscode-font-family, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
+  --agy-font-mono: var(--vscode-editor-font-family, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace);
+}
+
+body.vscode-light,
+body.agy-review-body.vscode-light,
+.markdown-preview.markdown-preview[data-use-github-style="true"]:not(.vscode-dark) {
+  --agy-bg: var(--vscode-editor-background, #ffffff);
+  --agy-surface: #ffffff;
+  --agy-fg: #1e293b;
+  --agy-heading: #0f172a;
+  --agy-muted: #f4f4f5;
+  --agy-muted-fg: #64748b;
+  --agy-secondary: #f2f2f5;
+  --agy-border: #e2e8f0;
+  --agy-table-border: rgba(100, 116, 139, 0.22);
+  --agy-link: #0969da;
+  --agy-link-hover: #0550ae;
+  --agy-code-fg: #9a3412;
+  --agy-code-header-bg: rgba(15, 23, 42, 0.05);
+  --agy-alert-note: #0969da;
+  --agy-alert-tip: #1a7f37;
+  --agy-alert-important: #8250df;
+  --agy-alert-warning: #9a6700;
+  --agy-alert-caution: #cf222e;
+}
+
+/* --------------------------------------------------------------------------
+   Base Container & Typography (Matches Antigravity leading-relaxed text-sm)
+   -------------------------------------------------------------------------- */
+body.vscode-body,
+body.agy-review-body,
+.markdown-preview.markdown-preview {
+  background-color: var(--agy-bg) !important;
+  color: var(--agy-fg) !important;
+  font-family: var(--agy-font-sans) !important;
+  font-size: 14px !important;
+  line-height: 1.625 !important;
+  -webkit-font-smoothing: antialiased;
+  margin: 0;
+  padding: 0;
+}
+
+body.vscode-body {
+  max-width: 880px;
+  margin: 0 auto !important;
+  padding: 28px 36px 64px !important;
+}
+
+.agy-review-container {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 24px 36px 72px;
+}
+
+.markdown-preview.markdown-preview {
+  padding: 24px 32px 64px !important;
+}
+
+/* --------------------------------------------------------------------------
+   Top Review Toolbar (Custom Editor)
+   -------------------------------------------------------------------------- */
+.agy-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 20px;
+  background: rgba(24, 24, 27, 0.86);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid rgba(63, 63, 70, 0.65);
+  font-size: 12px;
+  color: var(--agy-muted-fg);
+}
+
+body.vscode-light .agy-toolbar {
+  background: rgba(255, 255, 255, 0.88);
+  border-bottom-color: rgba(226, 232, 240, 0.9);
+}
+
+.agy-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.agy-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  background: rgba(106, 159, 203, 0.14);
+  color: var(--agy-link);
+  border: 1px solid rgba(106, 159, 203, 0.3);
+  white-space: nowrap;
+}
+
+.agy-badge-brain {
+  background: rgba(163, 113, 247, 0.14);
+  color: #c297ff;
+  border-color: rgba(163, 113, 247, 0.3);
+}
+
+.agy-filepath {
+  font-family: var(--agy-font-mono);
+  font-size: 11.5px;
+  color: var(--agy-muted-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agy-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.agy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--agy-border);
+  background: var(--agy-muted);
+  color: var(--agy-fg);
+  font-family: var(--agy-font-sans);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.agy-btn:hover {
+  background: rgba(161, 161, 170, 0.18);
+  border-color: var(--agy-muted-fg);
+}
+
+/* --------------------------------------------------------------------------
+   Headings (Exact Antigravity GSb/mQb classes: clean, borderless, crisp)
+   -------------------------------------------------------------------------- */
+body.vscode-body h1,
+body.agy-review-body h1,
+.markdown-preview.markdown-preview h1 {
+  font-size: 1.35rem !important;
+  line-height: 1.75rem !important;
+  font-weight: 600 !important;
+  color: var(--agy-heading) !important;
+  margin-top: 1.5rem !important;
+  margin-bottom: 0.5rem !important;
+  padding-bottom: 0 !important;
+  border-bottom: none !important;
+  letter-spacing: -0.015em;
+}
+
+body.vscode-body h1:first-child,
+.agy-review-container > h1:first-child,
+.markdown-preview.markdown-preview > h1:first-child {
+  margin-top: 0.25rem !important;
+}
+
+body.vscode-body h2,
+body.agy-review-body h2,
+.markdown-preview.markdown-preview h2 {
+  font-size: 1.125rem !important;
+  line-height: 1.75rem !important;
+  font-weight: 600 !important;
+  color: var(--agy-heading) !important;
+  margin-top: 1.5rem !important;
+  margin-bottom: 0.5rem !important;
+  padding-bottom: 0 !important;
+  border-bottom: none !important;
+  letter-spacing: -0.01em;
+}
+
+body.vscode-body h3,
+body.agy-review-body h3,
+.markdown-preview.markdown-preview h3 {
+  font-size: 1rem !important;
+  line-height: 1.5rem !important;
+  font-weight: 500 !important;
+  color: var(--agy-heading) !important;
+  margin-top: 0.85rem !important;
+  margin-bottom: 0.25rem !important;
+  border-bottom: none !important;
+}
+
+body.vscode-body h4,
+body.vscode-body h5,
+body.vscode-body h6,
+body.agy-review-body h4,
+body.agy-review-body h5,
+body.agy-review-body h6,
+.markdown-preview.markdown-preview h4,
+.markdown-preview.markdown-preview h5,
+.markdown-preview.markdown-preview h6 {
+  font-size: 0.875rem !important;
+  line-height: 1.25rem !important;
+  font-weight: 500 !important;
+  color: var(--agy-heading) !important;
+  margin-top: 0.75rem !important;
+  margin-bottom: 0.25rem !important;
+  border-bottom: none !important;
+}
+
+/* --------------------------------------------------------------------------
+   Paragraphs, Lists, Horizontal Rules, Blockquotes
+   -------------------------------------------------------------------------- */
+body.vscode-body p,
+body.agy-review-body p,
+.markdown-preview.markdown-preview p {
+  margin-top: 0.35rem !important;
+  margin-bottom: 0.35rem !important;
+  line-height: 1.625 !important;
+}
+
+body.vscode-body ul,
+body.vscode-body ol,
+body.agy-review-body ul,
+body.agy-review-body ol,
+.markdown-preview.markdown-preview ul,
+.markdown-preview.markdown-preview ol {
+  padding-left: 1.35rem !important;
+  margin-top: 0.35rem !important;
+  margin-bottom: 0.35rem !important;
+}
+
+body.vscode-body li,
+body.agy-review-body li,
+.markdown-preview.markdown-preview li {
+  margin-top: 0.2rem !important;
+  margin-bottom: 0.2rem !important;
+  line-height: 1.625 !important;
+}
+
+body.vscode-body hr,
+body.agy-review-body hr,
+.markdown-preview.markdown-preview hr {
+  border: 0 !important;
+  border-top: 1px solid var(--agy-border) !important;
+  opacity: 0.45 !important;
+  margin: 1.25rem 0 !important;
+  height: 1px !important;
+  background: transparent !important;
+}
+
+body.vscode-body blockquote:not(.markdown-alert),
+body.agy-review-body blockquote:not(.markdown-alert),
+.markdown-preview.markdown-preview blockquote:not(.markdown-alert) {
+  margin: 0.65rem 0 !important;
+  padding: 0.4rem 0.9rem !important;
+  border-left: 3px solid var(--agy-border) !important;
+  background: rgba(255, 255, 255, 0.02) !important;
+  color: var(--agy-muted-fg) !important;
+  border-radius: 0 6px 6px 0;
+}
+
+/* --------------------------------------------------------------------------
+   Links & File / Conversation Pills
+   -------------------------------------------------------------------------- */
+body.vscode-body a,
+body.agy-review-body a,
+.markdown-preview.markdown-preview a {
+  color: var(--agy-link) !important;
+  text-decoration: none !important;
+  word-break: break-word;
+  transition: color 0.12s ease;
+}
+
+body.vscode-body a:hover,
+body.agy-review-body a:hover,
+.markdown-preview.markdown-preview a:hover {
+  color: var(--agy-link-hover) !important;
+  text-decoration: underline !important;
+}
+
+a.agy-file-link,
+a.agy-conv-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(106, 159, 203, 0.12);
+  border: 1px solid rgba(106, 159, 203, 0.22);
+  font-family: var(--agy-font-mono);
+  font-size: 0.88em;
+  line-height: 1.45;
+}
+
+a.agy-file-link:hover,
+a.agy-conv-link:hover {
+  background: rgba(106, 159, 203, 0.22);
+  text-decoration: none !important;
+}
+
+/* --------------------------------------------------------------------------
+   Inline Code & Code Blocks (Matches Antigravity Okaidia + rounded-xl container)
+   -------------------------------------------------------------------------- */
+body.vscode-body :not(pre) > code,
+body.agy-review-body :not(pre) > code,
+.markdown-preview.markdown-preview :not(pre) > code {
+  font-family: var(--agy-font-mono) !important;
+  font-size: 0.88em !important;
+  background-color: var(--agy-muted) !important;
+  color: var(--agy-code-fg) !important;
+  padding: 0.125rem 0.35rem !important;
+  border-radius: 0.25rem !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  word-break: break-word;
+}
+
+body.vscode-light :not(pre) > code {
+  border-color: rgba(15, 23, 42, 0.08) !important;
+}
+
+.agy-code-block {
+  margin: 0.75rem 0 !important;
+  border-radius: 0.75rem !important;
+  background-color: var(--agy-muted) !important;
+  border: 1px solid var(--agy-border) !important;
+  overflow: hidden !important;
+}
+
+.agy-code-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.35rem 0.75rem;
+  background: var(--agy-code-header-bg);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font-family: var(--agy-font-mono);
+  font-size: 11px;
+  color: var(--agy-muted-fg);
+  user-select: none;
+}
+
+.agy-code-lang {
+  text-transform: lowercase;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+.agy-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--agy-muted-fg);
+  font-family: var(--agy-font-sans);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.agy-copy-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--agy-fg);
+}
+
+body.vscode-body pre,
+body.agy-review-body pre,
+.markdown-preview.markdown-preview pre {
+  font-family: var(--agy-font-mono) !important;
+  font-size: 12.5px !important;
+  line-height: 1.55 !important;
+  background-color: var(--agy-muted) !important;
+  color: var(--agy-fg) !important;
+  padding: 0.75rem 1rem !important;
+  margin: 0.75rem 0 !important;
+  border-radius: 0.75rem !important;
+  border: 1px solid var(--agy-border) !important;
+  overflow-x: auto !important;
+}
+
+.agy-code-block pre {
+  margin: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+}
+
+body.vscode-body pre code,
+body.agy-review-body pre code,
+.markdown-preview.markdown-preview pre code {
+  font-family: var(--agy-font-mono) !important;
+  background: transparent !important;
+  color: inherit !important;
+  padding: 0 !important;
+  border: none !important;
+  font-size: inherit !important;
+}
+
+/* --------------------------------------------------------------------------
+   Tables (Exact Antigravity rounded border-separate table)
+   -------------------------------------------------------------------------- */
+.agy-table-wrapper {
+  margin: 0.85rem 0 !important;
+  border-radius: 0.5rem !important;
+  overflow-x: auto !important;
+  border: 1px solid var(--agy-table-border) !important;
+  background: transparent;
+}
+
+body.vscode-body table,
+body.agy-review-body table,
+.markdown-preview.markdown-preview table {
+  min-width: 100% !important;
+  width: 100%;
+  border-collapse: separate !important;
+  border-spacing: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  font-size: 13px !important;
+}
+
+/* Fallback if a table is not yet wrapped */
+body.vscode-body > table,
+.markdown-preview.markdown-preview > table {
+  margin: 0.85rem 0 !important;
+  border-radius: 0.5rem !important;
+  border: 1px solid var(--agy-table-border) !important;
+  overflow: hidden;
+}
+
+body.vscode-body thead th,
+body.agy-review-body thead th,
+.markdown-preview.markdown-preview thead th,
+.markdown-preview.markdown-preview th {
+  background-color: var(--agy-secondary) !important;
+  color: var(--agy-heading) !important;
+  font-weight: 500 !important;
+  text-align: left !important;
+  padding: 0.5rem 0.75rem !important;
+  border: none !important;
+  border-left: 1px solid var(--agy-table-border) !important;
+}
+
+body.vscode-body thead th:first-child,
+body.agy-review-body thead th:first-child,
+.markdown-preview.markdown-preview thead th:first-child,
+.markdown-preview.markdown-preview th:first-child {
+  border-left: none !important;
+}
+
+body.vscode-body tbody td,
+body.agy-review-body tbody td,
+.markdown-preview.markdown-preview tbody td,
+.markdown-preview.markdown-preview td {
+  padding: 0.5rem 0.75rem !important;
+  border: none !important;
+  border-top: 1px solid var(--agy-table-border) !important;
+  border-left: 1px solid var(--agy-table-border) !important;
+  background-color: transparent !important;
+  color: var(--agy-fg) !important;
+  vertical-align: top;
+}
+
+body.vscode-body tbody td:first-child,
+body.agy-review-body tbody td:first-child,
+.markdown-preview.markdown-preview tbody td:first-child,
+.markdown-preview.markdown-preview td:first-child {
+  border-left: none !important;
+}
+
+body.vscode-body tbody tr:hover td,
+body.agy-review-body tbody tr:hover td,
+.markdown-preview.markdown-preview tbody tr:hover td {
+  background-color: rgba(255, 255, 255, 0.025) !important;
+}
+
+/* --------------------------------------------------------------------------
+   GitHub / Antigravity Callout Alerts ([!NOTE], [!TIP], [!IMPORTANT], [!WARNING], [!CAUTION])
+   -------------------------------------------------------------------------- */
+.markdown-alert {
+  padding: 0.65rem 1rem !important;
+  margin: 0.75rem 0 !important;
+  color: var(--agy-fg) !important;
+  border-left: 0.25em solid var(--agy-border) !important;
+  background: rgba(255, 255, 255, 0.025) !important;
+  border-radius: 0 0.5rem 0.5rem 0 !important;
+}
+
+body.vscode-light .markdown-alert {
+  background: rgba(15, 23, 42, 0.025) !important;
+}
+
+.markdown-alert > :first-child {
+  margin-top: 0 !important;
+}
+
+.markdown-alert > :last-child {
+  margin-bottom: 0 !important;
+}
+
+.markdown-alert .markdown-alert-title {
+  display: flex !important;
+  font-weight: 600 !important;
+  align-items: center !important;
+  line-height: 1.25 !important;
+  margin-bottom: 0.3rem !important;
+  font-size: 13.5px !important;
+}
+
+.markdown-alert .octicon {
+  margin-right: 0.5rem !important;
+  display: inline-block !important;
+  overflow: visible !important;
+  vertical-align: text-bottom !important;
+  fill: currentColor !important;
+  flex-shrink: 0;
+}
+
+.markdown-alert.markdown-alert-note {
+  border-left-color: var(--agy-alert-note) !important;
+  background: rgba(88, 166, 255, 0.06) !important;
+}
+.markdown-alert.markdown-alert-note .markdown-alert-title {
+  color: var(--agy-alert-note) !important;
+}
+
+.markdown-alert.markdown-alert-tip {
+  border-left-color: var(--agy-alert-tip) !important;
+  background: rgba(63, 185, 80, 0.06) !important;
+}
+.markdown-alert.markdown-alert-tip .markdown-alert-title {
+  color: var(--agy-alert-tip) !important;
+}
+
+.markdown-alert.markdown-alert-important {
+  border-left-color: var(--agy-alert-important) !important;
+  background: rgba(163, 113, 247, 0.06) !important;
+}
+.markdown-alert.markdown-alert-important .markdown-alert-title {
+  color: var(--agy-alert-important) !important;
+}
+
+.markdown-alert.markdown-alert-warning {
+  border-left-color: var(--agy-alert-warning) !important;
+  background: rgba(210, 153, 34, 0.07) !important;
+}
+.markdown-alert.markdown-alert-warning .markdown-alert-title {
+  color: var(--agy-alert-warning) !important;
+}
+
+.markdown-alert.markdown-alert-caution {
+  border-left-color: var(--agy-alert-caution) !important;
+  background: rgba(248, 81, 73, 0.07) !important;
+}
+.markdown-alert.markdown-alert-caution .markdown-alert-title {
+  color: var(--agy-alert-caution) !important;
+}
+
+/* --------------------------------------------------------------------------
+   Interactive Antigravity Carousels (````carousel ... <!-- slide --> ````)
+   -------------------------------------------------------------------------- */
+.agy-carousel {
+  margin: 0.85rem 0;
+  border-radius: 0.75rem;
+  border: 1px solid var(--agy-border);
+  background: var(--agy-secondary);
+  overflow: hidden;
+}
+
+.agy-carousel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.85rem;
+  background: var(--agy-code-header-bg);
+  border-bottom: 1px solid var(--agy-table-border);
+  font-size: 12px;
+  color: var(--agy-muted-fg);
+}
+
+.agy-carousel-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.agy-carousel-slide {
+  display: none;
+  padding: 1rem 1.25rem;
+}
+
+.agy-carousel-slide.active {
+  display: block;
+}
+
+/* --------------------------------------------------------------------------
+   Images & Mermaid Diagrams
+   -------------------------------------------------------------------------- */
+body.vscode-body img,
+body.agy-review-body img,
+.markdown-preview.markdown-preview img {
+  max-width: 100%;
+  border-radius: 0.5rem;
+}
+
+.agy-mermaid-container {
+  margin: 0.85rem 0;
+  padding: 1rem;
+  border-radius: 0.75rem;
+  background: var(--agy-secondary);
+  border: 1px solid var(--agy-table-border);
+  overflow-x: auto;
+  text-align: center;
+}

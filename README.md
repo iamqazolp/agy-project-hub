@@ -9,7 +9,7 @@ It drops a lightweight `.local-notes/` folder into your project containing short
 ## What it does
 
 - **Shortcuts instead of copies:** `.local-notes/` holds symlinks pointing straight to the original files in `brain/<session-id>/` (including `PROJECT_HUB.md`), so there is only ever one source of truth.
-- **Keeps the Antigravity style in VS Code:** Automatically sets up VS Code's `workbench.editorAssociations` (`antigravity.artifactEditor`) and bridges CLI/IDE brain folders so clicking any shortcut in `.local-notes/` or any link inside `PROJECT_HUB.md` opens in the native Antigravity Artifact Viewer.
+- **Bundled VS Code extension (`Antigravity Markdown Review`):** Installs `iamqazolp.agy-markdown-review` (`vscode-extension/`) into `~/.vscode/extensions/`. It applies Antigravity's Artifact Viewer design system (callout alerts, rounded tables, code blocks with copy headers, carousels, and clickable `file://` + `conversation://` links) across **every** Markdown review in VS Code—including its own `antigravity.markdownReview` custom editor, VS Code's built-in Markdown Preview, and Markdown Preview Enhanced.
 - **Updates automatically in the background:** Registers lightweight `PostInvocation`, `PostToolUse`, and `Stop` hooks in `~/.gemini/config/hooks.json`. Even if the agent forgets to update the hub, the hook updates `PROJECT_HUB.md` and conversation/context usage after every turn.
 - **Zero context overhead:** All transcript scanning, SQLite lineage decoding, and file syncing happen in an external Python script (`scripts/sync_local_notes.py`). It costs `0` LLM tokens when idle or running in hooks.
 - **Doesn't pollute git:** Adds `.local-notes/` to `.git/info/exclude` locally so your tracked `.gitignore` stays untouched.
@@ -55,10 +55,16 @@ When you have multiple root sessions and forks on the same repo, `sync_local_not
 ```text
 agy-project-hub/
 ├── SKILL.md                      # Skill instructions loaded by Antigravity (~22 lines)
-├── install.py                    # Installs the skill, hooks, and VS Code editor associations
+├── install.py                    # Installs the skill, hooks, and VS Code extension
 ├── README.md                     # This file
 ├── scripts/
 │   └── sync_local_notes.py       # Background sync & lineage reconstruction script
-└── resources/
-    └── viz_template.html         # HTML template for standalone diagrams
+├── resources/
+│   └── viz_template.html         # HTML template for standalone diagrams
+└── vscode-extension/             # "Antigravity Markdown Review" VS Code extension
+    ├── package.json
+    ├── extension.js
+    └── media/
+        ├── antigravity-markdown.css
+        └── antigravity-markdown.js
 ```
