@@ -512,6 +512,29 @@ def scan_brain_sessions(
                 pass
 
         if matched:
+            for p in top_files:
+                if p.suffix.lower() == ".md" and p.name not in {"PROJECT_HUB.md", "INDEX.md"}:
+                    meta_f = p.parent / f"{p.name}.metadata.json"
+                    foreign_origin = False
+                    if meta_f.exists():
+                        try:
+                            m_orig = str(
+                                json.loads(meta_f.read_text(encoding="utf-8", errors="ignore")).get(
+                                    "originSession"
+                                )
+                                or ""
+                            )
+                            if m_orig and m_orig != cid:
+                                foreign_origin = True
+                        except Exception:
+                            pass
+                    if not foreign_origin:
+                        authored_docs.add(p.name)
+                        if p.name not in origin_map:
+                            p_iso = dt.datetime.fromtimestamp(
+                                p.stat().st_mtime, tz=dt.timezone.utc
+                            ).isoformat()
+                            origin_map[p.name] = (p_iso, cid)
             mtime = conv_dir.stat().st_mtime
             if not last_ts_iso:
                 last_ts_iso = dt.datetime.fromtimestamp(mtime, tz=dt.timezone.utc).isoformat()
@@ -816,24 +839,23 @@ def collect_canonical_artifacts(
     sessions: list[dict[str, Any]],
     origin_map: dict[str, str],
     authored_ts_map: dict[str, str],
-    notes_dir: Path,
-    assets_dir: Path,
+    local_notes_dir: Path,
     workspace: Path,
 ) -> tuple[dict[str, Path], dict[str, dict[str, Any]]]:
-    """Gather the newest version of every image and Markdown note across BOTH all `brain/*`
-    sessions AND `<workspace>/.local-notes/notes/`.
+    """Gather the newest version of every image and Markdown note across all `brain/*`
+    sessions (and any legacy physical files in `<workspace>/.local-notes/`).
     """
     canonical_images: dict[str, Path] = {}
     canonical_mds: dict[str, dict[str, Any]] = {}
 
-    for img_dir in (workspace / "docs" / "assets", assets_dir):
-        if img_dir.exists():
+    for img_dir in (workspace / "docs" / "assets", local_notes_dir / "assets"):
+        if img_dir.exists() and not img_dir.is_symlink():
             for img in img_dir.iterdir():
-                if img.is_file() and img.suffix.lower() in {".png", ".svg", ".jpg", ".jpeg"}:
+                if img.is_file() and not img.is_symlink() and img.suffix.lower() in {".png", ".svg", ".jpg", ".jpeg"}:
                     canonical_images[img.name] = img
 
     def _consider_md(md_path: Path, fallback_sid: str, is_local_backup: bool = False) -> None:
-        if md_path.name in {"PROJECT_HUB.md", "INDEX.md"}:
+        if md_path.is_symlink() or md_path.name in {"PROJECT_HUB.md", "INDEX.md"}:
             return
         meta_file = md_path.parent / f"{md_path.name}.metadata.json"
         meta_summary = ""
@@ -897,6 +919,8 @@ def collect_canonical_artifacts(
 
     for sess in sessions:
         for art in sess["artifacts"]:
+            if art.is_symlink():
+                continue
             ext = art.suffix.lower()
             if ext in {".png", ".svg", ".jpg", ".jpeg"}:
                 prev_img = canonical_images.get(art.name)
@@ -906,9 +930,11 @@ def collect_canonical_artifacts(
                 _consider_md(art, sess["id"], is_local_backup=False)
 
     default_sid = sessions[0]["id"] if sessions else "local"
-    if notes_dir.exists():
-        for local_md in notes_dir.glob("*.md"):
-            _consider_md(local_md, origin_map.get(local_md.name, default_sid), is_local_backup=True)
+    for legacy_dir in (local_notes_dir, local_notes_dir / "notes"):
+        if legacy_dir.exists() and not legacy_dir.is_symlink():
+            for local_md in legacy_dir.glob("*.md"):
+                if not local_md.is_symlink():
+                    _consider_md(local_md, origin_map.get(local_md.name, default_sid), is_local_backup=True)
 
     return canonical_images, canonical_mds
 
@@ -939,6 +965,92 @@ def _write_text_preserving_mtime(dst: Path, content: str, mtime: float | None = 
             pass
 
 
+def _create_file_shortcut(src_brain_file: Path, dst_shortcut: Path) -> None:
+    """Create a symlink shortcut at `dst_shortcut` pointing directly to `src_brain_file`."""
+    src_resolved = src_brain_file.resolve()
+    if dst_shortcut.is_symlink() or dst_shortcut.exists():
+        try:
+            if dst_shortcut.is_symlink() and dst_shortcut.resolve() == src_resolved:
+                return
+        except Exception:
+            pass
+        dst_shortcut.unlink(missing_ok=True)
+    try:
+        os.symlink(src_resolved, dst_shortcut)
+    except OSError:
+        try:
+            os.link(src_resolved, dst_shortcut)
+        except OSError:
+            norm_target = str(src_resolved).replace("\\", "/").lstrip("/")
+            dst_shortcut.write_text(
+                f"# Shortcut -> [{src_resolved.name}](file:///{norm_target})\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+
+
+def sync_local_shortcuts(
+    local_notes_dir: Path,
+    primary_brain_dir: Path,
+    sorted_docs: list[dict[str, Any]],
+    sessions: list[dict[str, Any]],
+) -> None:
+    """Populate `<workspace>/.local-notes/` exclusively with shortcuts pointing to the
+    original files in `brain/` (including `PROJECT_HUB.md`), and remove legacy physical copies.
+    """
+    local_notes_dir.mkdir(parents=True, exist_ok=True)
+
+    # Clean up legacy physical subdirectories (`notes/`, `assets/`, `viz/`) and legacy index files
+    for legacy_sub in ("notes", "assets"):
+        sub_path = local_notes_dir / legacy_sub
+        if sub_path.is_symlink():
+            sub_path.unlink(missing_ok=True)
+        elif sub_path.is_dir():
+            shutil.rmtree(sub_path, ignore_errors=True)
+
+    viz_sub = local_notes_dir / "viz"
+    if viz_sub.is_dir() and not viz_sub.is_symlink():
+        for html_f in viz_sub.glob("*.html"):
+            if not html_f.is_symlink() and primary_brain_dir.exists():
+                dst_brain_html = primary_brain_dir / html_f.name
+                if not dst_brain_html.exists():
+                    shutil.copy2(html_f, dst_brain_html)
+        shutil.rmtree(viz_sub, ignore_errors=True)
+
+    for legacy_file in ("INDEX.md", "index.html"):
+        lf = local_notes_dir / legacy_file
+        if lf.exists() or lf.is_symlink():
+            lf.unlink(missing_ok=True)
+
+    expected_names: set[str] = set()
+
+    # 1. Shortcut for `PROJECT_HUB.md` -> `<primary_brain_dir>/PROJECT_HUB.md`
+    primary_hub = primary_brain_dir / "PROJECT_HUB.md"
+    if primary_hub.exists():
+        _create_file_shortcut(primary_hub, local_notes_dir / "PROJECT_HUB.md")
+        expected_names.add("PROJECT_HUB.md")
+
+    # 2. Shortcuts for every canonical Markdown artifact -> `<brain_dir>/<origin_sid>/<doc.name>`
+    for doc in sorted_docs:
+        orig_brain_path = Path(doc.get("brain_path") or (primary_brain_dir.parent / doc["origin_sid"] / doc["name"]))
+        if orig_brain_path.exists():
+            _create_file_shortcut(orig_brain_path, local_notes_dir / doc["name"])
+            expected_names.add(doc["name"])
+
+    # 3. Shortcuts for any HTML visualizations in brain sessions -> `<brain_dir>/<sid>/<viz.html>`
+    for sess in sessions:
+        for art in sess["artifacts"]:
+            if not art.is_symlink() and art.suffix.lower() == ".html" and art.exists():
+                _create_file_shortcut(art, local_notes_dir / art.name)
+                expected_names.add(art.name)
+
+    # Remove stale symlinks or leftover physical `.md` copies in `.local-notes/`
+    for item in local_notes_dir.iterdir():
+        if item.name not in expected_names:
+            if item.is_symlink() or (item.is_file() and item.suffix.lower() in {".md", ".html"}):
+                item.unlink(missing_ok=True)
+
+
 def sync_all_targets(
     sessions: list[dict[str, Any]],
     canonical_images: dict[str, Path],
@@ -947,24 +1059,12 @@ def sync_all_targets(
     git_state: dict[str, Any],
     target_session_ids: list[str],
     brain_dir: Path,
-    notes_dir: Path,
-    assets_dir: Path,
 ) -> list[Path]:
-    """Sync canonical images and Markdown artifacts into every target session's `brain/<id>/`
-    folder AND `<workspace>/.local-notes/notes/`, then generate `PROJECT_HUB.md`.
-    """
-    for img_name, src_img in canonical_images.items():
-        dst_asset = assets_dir / img_name
-        if src_img.resolve() != dst_asset.resolve():
-            shutil.copy2(src_img, dst_asset)
-
+    """Ensure canonical artifacts exist in their origin `brain/<id>/` folder and generate `PROJECT_HUB.md`."""
     sorted_docs = sort_canonical_docs(canonical_mds)
 
     for doc in sorted_docs:
         raw_txt = doc["path"].read_text(encoding="utf-8", errors="ignore").replace("\r\n", "\n")
-        rel_txt = rewrite_markdown_image_paths_relative(raw_txt, "../assets")
-        _write_text_preserving_mtime(notes_dir / doc["name"], rel_txt, doc["mtime"])
-
         # Ensure the canonical original file exists in its origin session's `brain/<origin_sid>/` folder
         orig_sid = doc["origin_sid"]
         orig_bdir = brain_dir / orig_sid
@@ -1223,231 +1323,6 @@ def sync_all_targets(
     return generated_hubs
 
 
-def update_local_index_md_with_native_links(
-    local_notes_dir: Path,
-    workspace: Path,
-    git_state: dict[str, Any],
-    sorted_docs: list[dict[str, Any]],
-    viz_dir: Path,
-    primary_brain_dir: Path,
-    sessions: list[dict[str, Any]],
-) -> Path:
-    """Write `<workspace>/.local-notes/INDEX.md` with categorized direct links to the native
-    brain artifacts and full session IDs / fork telemetry.
-    """
-    now_str = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    brain_norm = str(primary_brain_dir).replace("\\", "/").lstrip("/")
-    viz_files = sorted(viz_dir.glob("*.html"), key=lambda p: p.name)
-
-    lines = [
-        f"# `{workspace.name}` — Local Multi-Session & Fork Launcher",
-        "",
-        f"> **Synced:** `{now_str}` | **Active Branch:** `{git_state['current_branch']}` | **Artifacts:** `{len(sorted_docs)}` | **Sessions/Forks:** `{len(sessions)}`",
-        "> **How to open in Antigravity's Native Styled Viewer:** `Ctrl+Click` any link in the **Native Antigravity Viewer Link** column below.",
-        "",
-        "---",
-        "",
-        "## 1. Synced Project Knowledge Base",
-        "",
-        "| Category | Timestamp | Native Antigravity Viewer Link (Rich Style) | Key Contents | Origin Session (Full ID) | Local Backup |",
-        "| :--- | :--- | :--- | :--- | :--- | :--- |",
-        f"| **🧭 Hub** | `{now_str[:16]}` | [**`PROJECT_HUB.md`**](file:///{brain_norm}/PROJECT_HUB.md) | Master hub with Fork Tree, context telemetry, and activity logs. | `{primary_brain_dir.name}` | [`INDEX.md`](./INDEX.md) |",
-    ]
-    for doc in sorted_docs:
-        md_name = doc["name"]
-        st = doc["stats"]
-        orig_brain_path = doc.get("brain_path") or (primary_brain_dir.parent / doc["origin_sid"] / md_name)
-        orig_brain_norm = str(orig_brain_path).replace("\\", "/").lstrip("/")
-        lines.append(
-            f"| **{doc['category']}** | `{doc['updated_str']}` | [**`{md_name}`**](file:///{orig_brain_norm}) | {doc['purpose']} | `{doc['origin_sid']}` (`{st['line_count']} lines`) | [`notes/{md_name}`](./notes/{md_name}) |"
-        )
-
-    lines.extend(
-        [
-            "",
-            "## 2. Sessions & Fork Telemetry",
-            "",
-            "| Role & Fork Lineage | Full Session ID | Context (Active / Peak) | Chats & Steps | Active Window |",
-            "| :--- | :--- | :--- | :--- | :--- |",
-        ]
-    )
-    for s in sessions:
-        if s.get("is_subagent"):
-            agent_lbl = s.get("agent_name") or "subagent"
-            lineage = f"🤖 Subagent (`{agent_lbl}`) of `{s['parent_id'][:8]}`"
-        elif s["parent_id"]:
-            lineage = f"🔀 Fork of `{s['parent_id'][:8]}` @ `step {s['fork_step']}`"
-        else:
-            lineage = "🌱 Root (`step 0`)"
-        cur_ctx = format_tokens(s["current_ctx_tokens"])
-        peak_ctx = format_tokens(s["peak_ctx_tokens"])
-        step_span = s["last_step"] - s["first_step"] + 1
-        lines.append(
-            f"| {lineage} | `{s['id']}` | `{cur_ctx}` / `{peak_ctx}` | `{s['user_chats']} chats` (`{step_span} steps`, `#{s['first_step']}..#{s['last_step']}`) | `{s['started_local']}` -> `{s['last_active']}` |"
-        )
-
-    lines.extend(
-        [
-            "",
-            "## 3. Browser HTML Dashboards (`.local-notes/`)",
-            "",
-            "- [**Master Interactive HTML Hub (`index.html`)**](./index.html)",
-        ]
-    )
-    for v in viz_files:
-        lines.append(f"- [**{v.stem.replace('_', ' ').title()} (`viz/{v.name}`)**](./viz/{v.name})")
-
-    index_path = local_notes_dir / "INDEX.md"
-    index_path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
-    return index_path
-
-
-def generate_local_html_hub(
-    local_notes_dir: Path,
-    workspace: Path,
-    git_state: dict[str, Any],
-    sorted_docs: list[dict[str, Any]],
-    viz_dir: Path,
-    primary_brain_dir: Path,
-    sessions: list[dict[str, Any]],
-) -> Path:
-    """Render `<workspace>/.local-notes/index.html` using `resources/viz_template.html`."""
-    now_str = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    brain_norm = str(primary_brain_dir).replace("\\", "/").lstrip("/")
-    viz_files = sorted(viz_dir.glob("*.html"), key=lambda p: p.name)
-    template_path = Path(__file__).resolve().parent.parent / "resources" / "viz_template.html"
-    if template_path.exists():
-        tpl = template_path.read_text(encoding="utf-8", errors="ignore")
-    else:
-        tpl = (
-            "<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'/><title>{{TITLE}}</title>"
-            "<style>body{background:#0b0f17;color:#e2e8f0;font-family:sans-serif;padding:24px}"
-            ".card{background:#131a27;border:1px solid #26334d;border-radius:12px;padding:18px;margin-bottom:16px}"
-            "</style></head><body><h1>{{TITLE}}</h1><p>{{SUBTITLE}}</p><div>{{CONTENT}}</div></body></html>"
-        )
-
-    table_style = (
-        "width:100%;border-collapse:collapse;font-size:0.88rem;margin-top:8px;"
-    )
-    th_style = (
-        "text-align:left;padding:8px 10px;border-bottom:1px solid #26334d;color:#94a3b8;"
-    )
-    td_style = "padding:8px 10px;border-bottom:1px solid rgba(38,51,77,0.55);vertical-align:top;"
-    link_style = "color:#38bdf8;text-decoration:none;font-weight:600;"
-
-    doc_rows: list[str] = []
-    for doc in sorted_docs:
-        md_name = html.escape(doc["name"])
-        cat = html.escape(doc["category"])
-        upd = html.escape(doc["updated_str"])
-        purp = html.escape(doc["purpose"])
-        orig = html.escape(doc["origin_sid"])
-        orig_brain_path = doc.get("brain_path") or (primary_brain_dir.parent / doc["origin_sid"] / doc["name"])
-        orig_brain_norm = str(orig_brain_path).replace("\\", "/").lstrip("/")
-        native_href = f"file:///{orig_brain_norm}"
-        local_href = f"./notes/{doc['name']}"
-        doc_rows.append(
-            f"<tr>"
-            f"<td style='{td_style}'><strong>{cat}</strong></td>"
-            f"<td style='{td_style}'><code>{upd}</code></td>"
-            f"<td style='{td_style}'><a style='{link_style}' href='{html.escape(native_href)}'>{md_name}</a> "
-            f"<span style='color:#94a3b8;font-size:0.78rem;'>(<a style='color:#94a3b8;' href='{html.escape(local_href)}'>local</a>)</span></td>"
-            f"<td style='{td_style}'>{purp}</td>"
-            f"<td style='{td_style}'><code>{orig}</code></td>"
-            f"</tr>"
-        )
-
-    sess_rows: list[str] = []
-    for s in sessions:
-        if s.get("is_subagent"):
-            agent_lbl = html.escape(s.get("agent_name") or "subagent")
-            lineage = f"🤖 Subagent (<code>{agent_lbl}</code>) of <code>{html.escape(s['parent_id'][:8])}</code>"
-        elif s["parent_id"]:
-            lineage = f"🔀 Fork of <code>{html.escape(s['parent_id'][:8])}</code> @ step {s['fork_step']}"
-        else:
-            lineage = "🌱 Root (<code>step 0</code>)"
-        title_sfx = f" — <em>{html.escape(s['title'])}</em>" if s.get("title") else ""
-        cur_ctx = html.escape(format_tokens(s["current_ctx_tokens"]))
-        peak_ctx = html.escape(format_tokens(s["peak_ctx_tokens"]))
-        step_span = s["last_step"] - s["first_step"] + 1
-        sess_rows.append(
-            f"<tr>"
-            f"<td style='{td_style}'>{lineage}{title_sfx}</td>"
-            f"<td style='{td_style}'><code>{html.escape(s['id'])}</code></td>"
-            f"<td style='{td_style}'><strong>{cur_ctx}</strong> / {peak_ctx}</td>"
-            f"<td style='{td_style}'>{s['user_chats']} chats · {step_span} steps (<code>#{s['first_step']}..#{s['last_step']}</code>)</td>"
-            f"<td style='{td_style}'><code>{html.escape(s['started_local'])}</code> &rarr; <code>{html.escape(s['last_active'])}</code></td>"
-            f"</tr>"
-        )
-
-    viz_items = "".join(
-        f"<li><a style='{link_style}' href='./viz/{html.escape(v.name)}'>{html.escape(v.stem.replace('_', ' ').title())} (<code>viz/{html.escape(v.name)}</code>)</a></li>"
-        for v in viz_files
-    ) or "<li style='color:#94a3b8;'>No custom HTML visualizations in <code>.local-notes/viz/</code> yet.</li>"
-
-    content_html = f"""
-      <div class="card" style="margin-bottom: 18px;">
-        <h2>1. Synced Project Knowledge Base ({len(sorted_docs)} Artifacts)</h2>
-        <table style="{table_style}">
-          <thead>
-            <tr>
-              <th style="{th_style}">Category</th>
-              <th style="{th_style}">Timestamp</th>
-              <th style="{th_style}">Artifact</th>
-              <th style="{th_style}">Summary &amp; Purpose</th>
-              <th style="{th_style}">Origin Session</th>
-            </tr>
-          </thead>
-          <tbody>
-            {''.join(doc_rows) or f"<tr><td colspan='5' style='{td_style}color:#94a3b8;'>No synced Markdown artifacts yet.</td></tr>"}
-          </tbody>
-        </table>
-      </div>
-      <div class="card" style="margin-bottom: 18px;">
-        <h2>2. Sessions &amp; Fork Telemetry ({len(sessions)} Sessions)</h2>
-        <table style="{table_style}">
-          <thead>
-            <tr>
-              <th style="{th_style}">Lineage &amp; Title</th>
-              <th style="{th_style}">Full Session ID</th>
-              <th style="{th_style}">Context (Active / Peak)</th>
-              <th style="{th_style}">Chats &amp; Steps</th>
-              <th style="{th_style}">Active Window</th>
-            </tr>
-          </thead>
-          <tbody>
-            {''.join(sess_rows) or f"<tr><td colspan='5' style='{td_style}color:#94a3b8;'>No matching sessions found.</td></tr>"}
-          </tbody>
-        </table>
-      </div>
-      <div class="grid">
-        <div class="card">
-          <h2>3. Custom HTML Visualizations (<code>viz/</code>)</h2>
-          <ul style="margin:0;padding-left:20px;">{viz_items}</ul>
-        </div>
-        <div class="card">
-          <h2>4. Git State (<code>{html.escape(git_state['current_branch'])}</code>)</h2>
-          <pre>{html.escape(git_state['status'] or 'Working tree clean')}</pre>
-        </div>
-      </div>
-    """
-
-    rendered = (
-        tpl.replace("{{TITLE}}", html.escape(f"{workspace.name} — Project Hub"))
-        .replace(
-            "{{SUBTITLE}}",
-            html.escape(
-                f"Synced {now_str} · {len(sorted_docs)} Artifacts · {len(sessions)} Sessions/Forks"
-            ),
-        )
-        .replace("{{META_BADGE}}", html.escape(f"branch: {git_state['current_branch']}"))
-        .replace("{{CONTENT}}", content_html)
-    )
-    html_path = local_notes_dir / "index.html"
-    html_path.write_text(rendered, encoding="utf-8", newline="\n")
-    return html_path
-
-
 def resolve_default_brain_dir(session_id: str = "") -> Path:
     """Auto-resolve the active Antigravity brain directory across CLI and IDE data paths."""
     candidates = [
@@ -1464,9 +1339,116 @@ def resolve_default_brain_dir(session_id: str = "") -> Path:
     return candidates[0]
 
 
+def run_sync(
+    workspace: Path,
+    brain_dir: Path,
+    session_id: str = "",
+    quiet: bool = False,
+) -> list[Path]:
+    """Synchronize `PROJECT_HUB.md` across all project brain sessions and update `<workspace>/.local-notes/` shortcuts."""
+    local_notes_dir = workspace / ".local-notes"
+    local_notes_dir.mkdir(parents=True, exist_ok=True)
+
+    ensure_git_exclude(workspace, ".local-notes/")
+    git_state = collect_git_state(workspace)
+    sessions, origin_map, authored_ts_map = scan_brain_sessions(brain_dir, workspace)
+
+    target_sids = [s["id"] for s in sessions if not s.get("is_subagent")]
+    if not target_sids:
+        target_sids = [s["id"] for s in sessions]
+    if session_id and session_id not in target_sids:
+        target_sids.insert(0, session_id)
+
+    canonical_images, canonical_mds = collect_canonical_artifacts(
+        sessions, origin_map, authored_ts_map, local_notes_dir, workspace
+    )
+    sorted_docs = sort_canonical_docs(canonical_mds)
+
+    hubs = sync_all_targets(
+        sessions,
+        canonical_images,
+        canonical_mds,
+        workspace,
+        git_state,
+        target_sids,
+        brain_dir,
+    )
+
+    if target_sids:
+        primary_brain = brain_dir / (session_id or target_sids[0])
+        sync_local_shortcuts(local_notes_dir, primary_brain, sorted_docs, sessions)
+
+    if not quiet:
+        print(
+            f"Synced {len(sorted_docs)} artifacts across {len(sessions)} sessions/forks ({len(hubs)} native brain hubs)."
+        )
+        for h in hubs:
+            print(f"Native Hub: {h}")
+    return hubs
+
+
+def run_from_hook(hook_event: str) -> None:
+    """Handle Antigravity `PostToolUse` and `Stop` lifecycle hooks to keep `PROJECT_HUB.md`
+    and `.local-notes/` shortcuts automatically updated whenever brain artifacts change.
+    """
+    try:
+        raw_stdin = sys.stdin.read().strip()
+        payload = json.loads(raw_stdin) if raw_stdin else {}
+        conv_id = str(payload.get("conversationId") or "").strip()
+        ws_paths = payload.get("workspacePaths") or []
+        art_dir = str(payload.get("artifactDirectoryPath") or "").strip()
+
+        workspace: Path | None = None
+        for wp in ws_paths:
+            cand = Path(str(wp)).expanduser()
+            if cand.exists() and cand.is_dir():
+                workspace = cand.resolve()
+                break
+        if workspace is None:
+            workspace = Path.cwd().resolve()
+
+        if art_dir and Path(art_dir).exists():
+            brain_dir = Path(art_dir).resolve().parent
+        else:
+            brain_dir = resolve_default_brain_dir(conv_id).resolve()
+
+        should_sync = False
+        if hook_event == "post_tool":
+            tool_call = payload.get("toolCall") or {}
+            args_obj = tool_call.get("args") or {}
+            target_path = (
+                str(args_obj.get("Path") or args_obj.get("TargetFile") or "")
+                .strip('"')
+                .replace("\\", "/")
+            )
+            low_target = target_path.lower()
+            if (
+                "/brain/" in low_target
+                and low_target.endswith((".md", ".html"))
+                and not low_target.endswith("/project_hub.md")
+            ):
+                should_sync = True
+        elif hook_event == "stop":
+            if (workspace / ".local-notes").exists() or (
+                conv_id and (brain_dir / conv_id / "PROJECT_HUB.md").exists()
+            ):
+                should_sync = True
+
+        if should_sync:
+            run_sync(workspace, brain_dir, session_id=conv_id, quiet=True)
+    except Exception:
+        pass
+
+    if hook_event == "stop":
+        sys.stdout.write(json.dumps({"decision": "allow"}) + "\n")
+    else:
+        sys.stdout.write("{}\n")
+    sys.stdout.flush()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Bidirectional sync of multi-session artifacts & fork telemetry into native Antigravity brain folders & .local-notes/"
+        description="Sync multi-session artifacts & fork telemetry into native Antigravity brain hubs and .local-notes/ shortcuts"
     )
     parser.add_argument("--workspace", type=str, default=".", help="Workspace directory path")
     parser.add_argument(
@@ -1481,7 +1463,18 @@ def main() -> None:
         default="",
         help="Optional current conversation ID; syncs into all matched sessions for this workspace.",
     )
+    parser.add_argument(
+        "--from-hook",
+        type=str,
+        choices=["post_tool", "stop"],
+        default="",
+        help="Internal lifecycle hook mode ('post_tool' or 'stop')",
+    )
     args = parser.parse_args()
+
+    if args.from_hook:
+        run_from_hook(args.from_hook)
+        return
 
     workspace = Path(args.workspace).resolve()
     brain_dir = (
@@ -1489,56 +1482,7 @@ def main() -> None:
         if args.brain_dir
         else resolve_default_brain_dir(args.session_id).resolve()
     )
-
-    local_notes_dir = workspace / ".local-notes"
-    notes_dir = local_notes_dir / "notes"
-    viz_dir = local_notes_dir / "viz"
-    assets_dir = local_notes_dir / "assets"
-
-    for d in (local_notes_dir, notes_dir, viz_dir, assets_dir):
-        d.mkdir(parents=True, exist_ok=True)
-
-    ensure_git_exclude(workspace, ".local-notes/")
-    git_state = collect_git_state(workspace)
-    sessions, origin_map, authored_ts_map = scan_brain_sessions(brain_dir, workspace)
-
-    target_sids = [s["id"] for s in sessions if not s.get("is_subagent")]
-    if not target_sids:
-        target_sids = [s["id"] for s in sessions]
-    if args.session_id and args.session_id not in target_sids:
-        target_sids.insert(0, args.session_id)
-
-    canonical_images, canonical_mds = collect_canonical_artifacts(
-        sessions, origin_map, authored_ts_map, notes_dir, assets_dir, workspace
-    )
-    sorted_docs = sort_canonical_docs(canonical_mds)
-
-    hubs = sync_all_targets(
-        sessions,
-        canonical_images,
-        canonical_mds,
-        workspace,
-        git_state,
-        target_sids,
-        brain_dir,
-        notes_dir,
-        assets_dir,
-    )
-
-    if target_sids:
-        primary_brain = brain_dir / (args.session_id or target_sids[0])
-        update_local_index_md_with_native_links(
-            local_notes_dir, workspace, git_state, sorted_docs, viz_dir, primary_brain, sessions
-        )
-        generate_local_html_hub(
-            local_notes_dir, workspace, git_state, sorted_docs, viz_dir, primary_brain, sessions
-        )
-
-    print(
-        f"Synced {len(sorted_docs)} artifacts across {len(sessions)} sessions/forks ({len(hubs)} native brain hubs)."
-    )
-    for h in hubs:
-        print(f"Native Hub: {h}")
+    run_sync(workspace, brain_dir, session_id=args.session_id, quiet=False)
 
 
 if __name__ == "__main__":

@@ -3,14 +3,56 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from pathlib import Path
 
 
+def register_lifecycle_hooks(config_root: Path, py_cmd: str, installed_script: Path) -> Path:
+    """Register `local-recap-auto-sync` in `~/.gemini/config/hooks.json` so `PROJECT_HUB.md`
+    and `.local-notes/` shortcuts are automatically updated whenever brain artifacts are modified.
+    """
+    hooks_file = config_root / "hooks.json"
+    hooks_data: dict = {}
+    if hooks_file.exists():
+        try:
+            loaded = json.loads(hooks_file.read_text(encoding="utf-8", errors="ignore"))
+            if isinstance(loaded, dict):
+                hooks_data = loaded
+        except Exception:
+            pass
+
+    hooks_data["local-recap-auto-sync"] = {
+        "enabled": True,
+        "PostToolUse": [
+            {
+                "matcher": "write_file|edit_file|write_to_file|replace_file_content|multi_replace_file_content",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": f'{py_cmd} "{installed_script}" --from-hook post_tool',
+                        "timeout": 15,
+                    }
+                ],
+            }
+        ],
+        "Stop": [
+            {
+                "type": "command",
+                "command": f'{py_cmd} "{installed_script}" --from-hook stop',
+                "timeout": 15,
+            }
+        ],
+    }
+    hooks_file.write_text(json.dumps(hooks_data, indent=2) + "\n", encoding="utf-8", newline="\n")
+    return hooks_file
+
+
 def main() -> None:
     repo_root = Path(__file__).resolve().parent
-    target_dir = Path.home() / ".gemini" / "config" / "skills" / "local-recap"
+    config_root = Path.home() / ".gemini" / "config"
+    target_dir = config_root / "skills" / "local-recap"
     target_dir.mkdir(parents=True, exist_ok=True)
 
     items = [
@@ -35,6 +77,8 @@ def main() -> None:
     )
     installed_skill_md.write_text(skill_text, encoding="utf-8", newline="\n")
 
+    hooks_file = register_lifecycle_hooks(config_root, py_cmd, installed_script)
+    print(f"Configured auto-sync hooks: {hooks_file}")
     print(f"\nSkill 'local-recap' is ready at: {target_dir}")
 
 
