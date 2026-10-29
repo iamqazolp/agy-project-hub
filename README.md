@@ -4,10 +4,10 @@ A **zero-context-overhead** multi-session & fork management skill for **Google A
 
 When running multiple concurrent sessions and forks on the same codebase, notes and artifacts get scattered across isolated `~/.gemini/antigravity-cli/brain/<conversation-id>/` directories, and opening `.md` files outside the active session's brain folder loses Antigravity's rich native Artifact Viewer styling.
 
-`agy-project-hub` solves this with an out-of-context Python synchronizer (`scripts/sync_local_notes.py`) that:
-1. **Syncs all Markdown notes & visual assets bidirectionally** across every session/fork of a workspace (`brain/<id>/*` $\leftrightarrow$ `<workspace>/.local-notes/notes/*`).
-2. **Registers companion `<name>.md.metadata.json` files** in every active session's `brain/<id>/` directory so every note from every sibling session opens in **Antigravity's native styled Artifact Viewer**.
-3. **Reconstructs the exact Multi-Root Session Fork Forest** and per-session telemetry (`Active Context`, `Peak Context`, `Compaction Count`, `Total Output Tokens`, `Chats & Steps`, `Start -> Last Active` local timestamps, and `Full Session UUIDs`) into `PROJECT_HUB.md`.
+`agy-project-hub` solves this with an out-of-context Python synchronizer (`scripts/sync_local_notes.py`) and non-blocking lifecycle hooks that:
+1. **Creates lightweight shortcuts in `<workspace>/.local-notes/`** pointing directly to the canonical files in `brain/<origin_sid>/` (including `PROJECT_HUB.md` and all Markdown/HTML artifacts) without duplicating files.
+2. **Auto-configures VS Code `workbench.editorAssociations` & IDE/CLI brain bridging** so clicking any `.local-notes/*.md` shortcut in the VS Code Explorer or any `file:///` link inside `PROJECT_HUB.md` opens directly in **Antigravity's native styled Artifact Viewer (`antigravity.artifactEditor`)**.
+3. **Continuously updates `PROJECT_HUB.md` via out-of-context lifecycle hooks** (`PostInvocation`, `PostToolUse`, and `Stop` in `~/.gemini/config/hooks.json`) with **`0` LLM context token overhead**, reconstructing the Multi-Root Session Fork Forest and per-session telemetry (`Active Context`, `Peak Context`, `Compaction Count`, `Total Output Tokens`, `Chats & Steps`, `Start -> Last Active` local timestamps, and `Full Session UUIDs`).
 4. **Auto-excludes `.local-notes/` via `.git/info/exclude`** so target repositories stay 100% clean without modifying tracked `.gitignore` files.
 
 ---
