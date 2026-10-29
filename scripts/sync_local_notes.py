@@ -832,14 +832,9 @@ def collect_canonical_artifacts(
                 if img.is_file() and img.suffix.lower() in {".png", ".svg", ".jpg", ".jpeg"}:
                     canonical_images[img.name] = img
 
-    def _consider_md(md_path: Path, fallback_sid: str) -> None:
+    def _consider_md(md_path: Path, fallback_sid: str, is_local_backup: bool = False) -> None:
         if md_path.name in {"PROJECT_HUB.md", "INDEX.md"}:
             return
-        mtime = md_path.stat().st_mtime
-        existing = canonical_mds.get(md_path.name)
-        if existing is not None and existing["mtime"] >= mtime:
-            return
-
         meta_file = md_path.parent / f"{md_path.name}.metadata.json"
         meta_summary = ""
         meta_origin = ""
@@ -851,11 +846,35 @@ def collect_canonical_artifacts(
             except Exception:
                 pass
 
+        # Skip previously-synced duplicate copies in non-origin brain folders when the original brain file exists
+        if (
+            not is_local_backup
+            and meta_origin
+            and meta_origin != fallback_sid
+            and (md_path.parent.parent / meta_origin / md_path.name).exists()
+        ):
+            return
+
+        mtime = md_path.stat().st_mtime
+        existing = canonical_mds.get(md_path.name)
+        if existing is not None:
+            if is_local_backup and not existing.get("from_local_backup", False):
+                return
+            if existing["mtime"] >= mtime:
+                return
+
         raw_content = md_path.read_text(encoding="utf-8", errors="ignore")
         title = extract_md_title(md_path)
         prio, category, purpose = classify_document(md_path.name, title, raw_content, meta_summary)
         stats = extract_md_sections_and_stats(raw_content)
-        true_origin = origin_map.get(md_path.name) or meta_origin or fallback_sid
+        if is_local_backup:
+            true_origin = origin_map.get(md_path.name) or meta_origin or fallback_sid
+            brain_root = sessions[0]["path"].parent if sessions else md_path.parent
+            orig_brain_path = brain_root / true_origin / md_path.name
+        else:
+            true_origin = meta_origin or fallback_sid or origin_map.get(md_path.name, "")
+            orig_candidate = md_path.parent.parent / true_origin / md_path.name if true_origin else md_path
+            orig_brain_path = orig_candidate if orig_candidate.exists() else md_path
         true_ts = authored_ts_map.get(md_path.name) or dt.datetime.fromtimestamp(mtime).strftime(
             "%Y-%m-%d %H:%M"
         )
@@ -863,6 +882,8 @@ def collect_canonical_artifacts(
         canonical_mds[md_path.name] = {
             "name": md_path.name,
             "path": md_path,
+            "brain_path": orig_brain_path,
+            "from_local_backup": is_local_backup,
             "mtime": mtime,
             "updated_str": true_ts,
             "title": title,
@@ -882,12 +903,12 @@ def collect_canonical_artifacts(
                 if prev_img is None or art.stat().st_mtime > prev_img.stat().st_mtime:
                     canonical_images[art.name] = art
             elif ext == ".md":
-                _consider_md(art, sess["id"])
+                _consider_md(art, sess["id"], is_local_backup=False)
 
     default_sid = sessions[0]["id"] if sessions else "local"
     if notes_dir.exists():
         for local_md in notes_dir.glob("*.md"):
-            _consider_md(local_md, origin_map.get(local_md.name, default_sid))
+            _consider_md(local_md, origin_map.get(local_md.name, default_sid), is_local_backup=True)
 
     return canonical_images, canonical_mds
 
@@ -944,6 +965,23 @@ def sync_all_targets(
         rel_txt = rewrite_markdown_image_paths_relative(raw_txt, "../assets")
         _write_text_preserving_mtime(notes_dir / doc["name"], rel_txt, doc["mtime"])
 
+        # Ensure the canonical original file exists in its origin session's `brain/<origin_sid>/` folder
+        orig_sid = doc["origin_sid"]
+        orig_bdir = brain_dir / orig_sid
+        if orig_bdir.exists():
+            for img_name, src_img in canonical_images.items():
+                dst_img = orig_bdir / img_name
+                if src_img.resolve() != dst_img.resolve():
+                    shutil.copy2(src_img, dst_img)
+            orig_md = orig_bdir / doc["name"]
+            rewritten_orig = rewrite_md_images_for_brain_dir(raw_txt, orig_bdir)
+            _write_text_preserving_mtime(orig_md, rewritten_orig, doc["mtime"])
+            doc_iso = dt.datetime.fromtimestamp(doc["mtime"], tz=dt.timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%S.%f0Z"
+            )
+            write_artifact_metadata(orig_md, doc["purpose"], orig_sid, updated_at_iso=doc_iso)
+            doc["brain_path"] = orig_md
+
     generated_hubs: list[Path] = []
     now_str = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cur_branch = git_state["current_branch"]
@@ -956,28 +994,26 @@ def sync_all_targets(
         tdir = brain_dir / sid
         if not tdir.exists():
             continue
-        tdir_norm = str(tdir).replace("\\", "/").lstrip("/")
 
-        for img_name, src_img in canonical_images.items():
-            dst_img = tdir / img_name
-            if src_img.resolve() != dst_img.resolve():
-                shutil.copy2(src_img, dst_img)
-
+        # Remove stale duplicate copies of other sessions' artifacts that were synced into `tdir` previously
         for doc in sorted_docs:
-            dst_md = tdir / doc["name"]
-            raw_txt = doc["path"].read_text(encoding="utf-8", errors="ignore").replace("\r\n", "\n")
-            rewritten_txt = rewrite_md_images_for_brain_dir(raw_txt, tdir)
-            _write_text_preserving_mtime(dst_md, rewritten_txt, doc["mtime"])
-            doc_iso = dt.datetime.fromtimestamp(doc["mtime"], tz=dt.timezone.utc).strftime(
-                "%Y-%m-%dT%H:%M:%S.%f0Z"
-            )
-            write_artifact_metadata(dst_md, doc["purpose"], doc["origin_sid"], updated_at_iso=doc_iso)
+            if doc["origin_sid"] != sid and doc.get("brain_path") and Path(doc["brain_path"]).exists():
+                stale_md = tdir / doc["name"]
+                stale_meta = tdir / f"{doc['name']}.metadata.json"
+                if stale_md.exists() and stale_meta.exists():
+                    try:
+                        mobj = json.loads(stale_meta.read_text(encoding="utf-8", errors="ignore"))
+                        if mobj.get("originSession") == doc["origin_sid"]:
+                            stale_md.unlink(missing_ok=True)
+                            stale_meta.unlink(missing_ok=True)
+                    except Exception:
+                        pass
 
         hub_lines = [
             f"# ⚡ `{workspace.name}` — Multi-Session & Fork Command Center",
             "",
             "> [!TIP]",
-            f"> **Zero-Context-Overhead Sync:** All {len(sorted_docs)} project guides and {len(sessions)} session/fork logs are synced into this session's native artifact folder (`{sid}`) by an external Python script (`0` LLM tokens used). Click any document below to open it in **Antigravity's native styled Artifact Viewer**.",
+            f"> **Zero-Context-Overhead Sync:** All {len(sorted_docs)} project guides and {len(sessions)} session/fork logs are indexed in this session's native artifact hub (`{sid}`) by an external Python script (`0` LLM tokens used). Click any document below to open the original brain artifact in **Antigravity's native styled Artifact Viewer**.",
             "",
             "---",
             "",
@@ -997,7 +1033,9 @@ def sync_all_targets(
             orig_full = doc["origin_sid"]
             orig_link = f"[`{orig_full}`](conversation://{orig_full})"
             scope_col = f"{orig_link} (`{st['line_count']} lines`{vis_str})"
-            doc_col = f"[**`{md_name}`**](file:///{tdir_norm}/{md_name})"
+            orig_brain_path = doc.get("brain_path") or (brain_dir / orig_full / md_name)
+            orig_brain_norm = str(orig_brain_path).replace("\\", "/").lstrip("/")
+            doc_col = f"[**`{md_name}`**](file:///{orig_brain_norm})"
             hub_lines.append(
                 f"| **{cat}** | `{doc['updated_str']}` | {doc_col} | {purpose} | {h2_badges} | {scope_col} |"
             )
@@ -1048,11 +1086,17 @@ def sync_all_targets(
             time_cell = f"`{s['started_local']}` -> `{s['last_active']}`"
 
             valid_authored = [a for a in (s.get("authored_docs") or []) if a in canonical_mds]
-            docs_cell = (
-                " · ".join(f"[`{a}`](file:///{tdir_norm}/{a})" for a in valid_authored)
-                if valid_authored
-                else "—"
-            )
+            doc_links: list[str] = []
+            for a in valid_authored:
+                s_art_path = s["path"] / a
+                target_art = (
+                    s_art_path
+                    if s_art_path.exists()
+                    else (canonical_mds[a].get("brain_path") or (brain_dir / canonical_mds[a]["origin_sid"] / a))
+                )
+                target_norm = str(target_art).replace("\\", "/").lstrip("/")
+                doc_links.append(f"[`{a}`](file:///{target_norm})")
+            docs_cell = " · ".join(doc_links) if doc_links else "—"
             hub_lines.append(
                 f"| {lineage} | {id_cell} | {ctx_cell} | {chats_cell} | {time_cell} | {docs_cell} |"
             )
@@ -1212,8 +1256,10 @@ def update_local_index_md_with_native_links(
     for doc in sorted_docs:
         md_name = doc["name"]
         st = doc["stats"]
+        orig_brain_path = doc.get("brain_path") or (primary_brain_dir.parent / doc["origin_sid"] / md_name)
+        orig_brain_norm = str(orig_brain_path).replace("\\", "/").lstrip("/")
         lines.append(
-            f"| **{doc['category']}** | `{doc['updated_str']}` | [**`{md_name}`**](file:///{brain_norm}/{md_name}) | {doc['purpose']} | `{doc['origin_sid']}` (`{st['line_count']} lines`) | [`notes/{md_name}`](./notes/{md_name}) |"
+            f"| **{doc['category']}** | `{doc['updated_str']}` | [**`{md_name}`**](file:///{orig_brain_norm}) | {doc['purpose']} | `{doc['origin_sid']}` (`{st['line_count']} lines`) | [`notes/{md_name}`](./notes/{md_name}) |"
         )
 
     lines.extend(
@@ -1296,7 +1342,9 @@ def generate_local_html_hub(
         upd = html.escape(doc["updated_str"])
         purp = html.escape(doc["purpose"])
         orig = html.escape(doc["origin_sid"])
-        native_href = f"file:///{brain_norm}/{doc['name']}"
+        orig_brain_path = doc.get("brain_path") or (primary_brain_dir.parent / doc["origin_sid"] / doc["name"])
+        orig_brain_norm = str(orig_brain_path).replace("\\", "/").lstrip("/")
+        native_href = f"file:///{orig_brain_norm}"
         local_href = f"./notes/{doc['name']}"
         doc_rows.append(
             f"<tr>"
