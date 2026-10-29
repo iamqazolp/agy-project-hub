@@ -1,74 +1,64 @@
-# ⚡ `agy-project-hub` (`local-recap` Skill)
+# agy-project-hub (`local-recap`)
 
-A **zero-context-overhead** multi-session & fork management skill for **Google Antigravity**.
+If you run multiple sessions or forks on the same project in Google Antigravity, your notes, plans, and deep dives end up scattered across random `~/.gemini/antigravity-cli/brain/<session-id>/` folders. Worse, if you copy those `.md` files into your workspace to keep track of them, VS Code opens them as plain text instead of using Antigravity's styled Artifact Viewer.
 
-When running multiple concurrent sessions and forks on the same codebase, notes and artifacts get scattered across isolated `~/.gemini/antigravity-cli/brain/<conversation-id>/` directories, and opening `.md` files outside the active session's brain folder loses Antigravity's rich native Artifact Viewer styling.
+`agy-project-hub` fixes this without burning your context window.
 
-`agy-project-hub` solves this with an out-of-context Python synchronizer (`scripts/sync_local_notes.py`) and non-blocking lifecycle hooks that:
-1. **Creates lightweight shortcuts in `<workspace>/.local-notes/`** pointing directly to the canonical files in `brain/<origin_sid>/` (including `PROJECT_HUB.md` and all Markdown/HTML artifacts) without duplicating files.
-2. **Auto-configures VS Code `workbench.editorAssociations` & IDE/CLI brain bridging** so clicking any `.local-notes/*.md` shortcut in the VS Code Explorer or any `file:///` link inside `PROJECT_HUB.md` opens directly in **Antigravity's native styled Artifact Viewer (`antigravity.artifactEditor`)**.
-3. **Continuously updates `PROJECT_HUB.md` via out-of-context lifecycle hooks** (`PostInvocation`, `PostToolUse`, and `Stop` in `~/.gemini/config/hooks.json`) with **`0` LLM context token overhead**, reconstructing the Multi-Root Session Fork Forest and per-session telemetry (`Active Context`, `Peak Context`, `Compaction Count`, `Total Output Tokens`, `Chats & Steps`, `Start -> Last Active` local timestamps, and `Full Session UUIDs`).
-4. **Auto-excludes `.local-notes/` via `.git/info/exclude`** so target repositories stay 100% clean without modifying tracked `.gitignore` files.
+It drops a lightweight `.local-notes/` folder into your project containing shortcuts back to the original brain artifacts, and keeps a single `PROJECT_HUB.md` dashboard updated with every note, session, fork tree, and context token count across the repo.
 
----
+## What it does
 
-## 🧠 Why It Uses ~0 Context Tokens in Your Sessions
+- **Shortcuts instead of copies:** `.local-notes/` holds symlinks pointing straight to the original files in `brain/<session-id>/` (including `PROJECT_HUB.md`), so there is only ever one source of truth.
+- **Keeps the Antigravity style in VS Code:** Automatically sets up VS Code's `workbench.editorAssociations` (`antigravity.artifactEditor`) and bridges CLI/IDE brain folders so clicking any shortcut in `.local-notes/` or any link inside `PROJECT_HUB.md` opens in the native Antigravity Artifact Viewer.
+- **Updates automatically in the background:** Registers lightweight `PostInvocation`, `PostToolUse`, and `Stop` hooks in `~/.gemini/config/hooks.json`. Even if the agent forgets to update the hub, the hook updates `PROJECT_HUB.md` and conversation/context usage after every turn.
+- **Zero context overhead:** All transcript scanning, SQLite lineage decoding, and file syncing happen in an external Python script (`scripts/sync_local_notes.py`). It costs `0` LLM tokens when idle or running in hooks.
+- **Doesn't pollute git:** Adds `.local-notes/` to `.git/info/exclude` locally so your tracked `.gitignore` stays untouched.
 
-1. **Progressive Disclosure (`~30 tokens` idle):** Antigravity only loads the 2-line YAML frontmatter of [`SKILL.md`](./SKILL.md) into the system prompt unless you explicitly ask to recap or sync notes. Even when activated, [`SKILL.md`](./SKILL.md) is only **22 lines (`~160 tokens`)**.
-2. **100% Out-of-Context Execution (`0 LLM tokens` for scanning):** The agent never reads other sessions' transcripts into its own context window. Instead, [`scripts/sync_local_notes.py`](./scripts/sync_local_notes.py) runs as a standalone Python subprocess that parses SQLite metadata and `.system_generated/logs/transcript.jsonl` files on disk and writes `PROJECT_HUB.md` directly.
-
----
-
-## 🌳 How Multi-Root & Fork Lineage Resolution Works
-
-Even when a project has **multiple independent Root Sessions** (and forks whose step numbers collide across trees), [`scripts/sync_local_notes.py`](./scripts/sync_local_notes.py) resolves the exact lineage tree via a 3-stage pipeline:
-
-1. **Stage 1 — Ground-Truth SQLite `parent_references` Decoding:**
-   - Queries `~/.gemini/antigravity-cli/conversation_summaries.db` (`workspace_uris`, `title`) to discover all sessions belonging to the workspace (even brand-new root sessions that haven't mentioned the repo name in chat yet).
-   - Reads `~/.gemini/antigravity-cli/conversations/<session-id>.db` $\rightarrow$ `parent_references`, decoding the protobuf wire format (`Field 6` = exact 36-char Parent Session UUID, `Field 2` varint = exact `fork_step` index, `Row 0` = ultimate `root_id`, `len(rows)` = `fork_depth`).
-2. **Stage 2 — Transcript Header UUID Fallback:**
-   - Scans the opening `transcript.jsonl` context summary and artifact paths for parent session UUIDs if the `.db` file is unavailable.
-3. **Stage 3 — Step-Boundary Token + Timestamp Fingerprint Fallback:**
-   - Matches the candidate parent whose cumulative context at `fork_step` (`input_tokens + cache_read_tokens + output_tokens`) matches the fork's opening context and occurred prior to the fork's start timestamp.
-
----
-
-## 📦 Installation
-
-Run the included installer to install (or update) the skill into `~/.gemini/config/skills/local-recap`:
+## Installation
 
 ```bash
-python install.py
+git clone https://github.com/iamqazolp/agy-project-hub.git
+cd agy-project-hub
+python3 install.py
 ```
 
----
+Nevermind, just ask your Antigravity agent to install the skill for you. You just give it the repo link and wait 10 minutes.
 
-## 🚀 Usage
+## Usage
 
-### Inside Antigravity Chat
-Ask the agent naturally in any session:
-- *"Recap our progress across all sessions and sync the hub"*
-- *"Write a deep-dive note on `<topic>` and sync it to `.local-notes`"*
-- *"Show me the session fork tree and context usage"*
+Once installed, everything syncs automatically at the end of each turn. Just open `.local-notes/PROJECT_HUB.md` from your VS Code file explorer to see:
 
-### Standalone CLI
-You can also run the synchronizer directly from any terminal:
+1. **Knowledge Base:** Every Markdown note and visualization across all sessions for the project, grouped into Recaps, Deep Dives, and Specs/Plans.
+2. **Session & Fork Telemetry:** A Mermaid fork tree and table showing every root session, fork, and subagent, along with active/peak context usage, chat counts, and clickable `conversation://` links.
+3. **Recent Prompts & Git State:** The last few prompts per session so you remember what each fork was doing, plus current branch tips.
+
+You can also ask the agent directly in chat:
+- *"Recap our progress across all sessions"*
+- *"Write a deep-dive note on the data pipeline and sync local notes"*
+
+Or run the sync script manually from a terminal:
 
 ```bash
-python scripts/sync_local_notes.py --workspace /path/to/your/project --session-id <optional-current-session-uuid>
+python3 ~/.gemini/config/skills/local-recap/scripts/sync_local_notes.py --workspace /path/to/repo
 ```
 
----
+## How fork lineage is reconstructed
 
-## 📁 Repository Structure
+When you have multiple root sessions and forks on the same repo, `sync_local_notes.py` figures out which session forked from where in three steps:
+
+1. **SQLite `parent_references`:** Reads `~/.gemini/antigravity-cli/conversation_summaries.db` and `conversations/<session-id>.db` to decode the exact parent UUID and fork step.
+2. **Transcript references:** Falls back to scanning opening context summaries in `transcript.jsonl` if the `.db` entry isn't available.
+3. **Token + timestamp fingerprinting:** Matches cumulative token counts (`input + cache_read + output`) at the fork step against candidate parent sessions.
+
+## Files
 
 ```text
 agy-project-hub/
-├── SKILL.md                      # Ultra-compact Antigravity skill definition (~22 lines)
-├── install.py                    # Cross-platform installer to ~/.gemini/config/skills/local-recap
-├── README.md                     # Architecture & usage guide
+├── SKILL.md                      # Skill instructions loaded by Antigravity (~22 lines)
+├── install.py                    # Installs the skill, hooks, and VS Code editor associations
+├── README.md                     # This file
 ├── scripts/
-│   └── sync_local_notes.py       # Out-of-context multi-session & fork synchronizer
+│   └── sync_local_notes.py       # Background sync & lineage reconstruction script
 └── resources/
-    └── viz_template.html         # Dark-mode interactive HTML visualization template
+    └── viz_template.html         # HTML template for standalone diagrams
 ```
