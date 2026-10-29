@@ -1051,6 +1051,90 @@ def sync_local_shortcuts(
                 item.unlink(missing_ok=True)
 
 
+def ensure_vscode_editor_associations(workspace: Path | None = None) -> None:
+    """Ensure VS Code's `workbench.editorAssociations` maps `.local-notes/*.md` shortcuts
+    to `antigravity.artifactEditor` so clicking them in the VS Code Explorer opens the
+    Antigravity Artifact Viewer style instead of raw Markdown text.
+    """
+    home = Path.home()
+    candidates: list[Path] = []
+    if sys.platform == "darwin":
+        app_support = home / "Library" / "Application Support"
+        candidates = [
+            app_support / "Code" / "User" / "settings.json",
+            app_support / "Antigravity" / "User" / "settings.json",
+            app_support / "Cursor" / "User" / "settings.json",
+        ]
+    elif os.name == "nt":
+        appdata = Path(os.environ.get("APPDATA", str(home / "AppData" / "Roaming")))
+        candidates = [
+            appdata / "Code" / "User" / "settings.json",
+            appdata / "Antigravity" / "User" / "settings.json",
+            appdata / "Cursor" / "User" / "settings.json",
+        ]
+    else:
+        cfg = home / ".config"
+        candidates = [
+            cfg / "Code" / "User" / "settings.json",
+            cfg / "Antigravity" / "User" / "settings.json",
+            cfg / "Cursor" / "User" / "settings.json",
+        ]
+    if workspace and (workspace / ".vscode" / "settings.json").exists():
+        candidates.append(workspace / ".vscode" / "settings.json")
+
+    for settings_path in candidates:
+        if not settings_path.parent.exists():
+            continue
+        data: dict[str, Any] = {}
+        if settings_path.exists():
+            try:
+                loaded = json.loads(settings_path.read_text(encoding="utf-8", errors="ignore"))
+                if isinstance(loaded, dict):
+                    data = loaded
+            except Exception:
+                continue
+        assoc = data.get("workbench.editorAssociations")
+        if not isinstance(assoc, dict):
+            assoc = {}
+        changed = False
+        for pattern in ("**/.local-notes/*.md", "**/.local-notes/**/*.md", "**/.gemini/*/brain/**/*.md"):
+            if assoc.get(pattern) != "antigravity.artifactEditor":
+                assoc[pattern] = "antigravity.artifactEditor"
+                changed = True
+        if changed:
+            data["workbench.editorAssociations"] = assoc
+            try:
+                settings_path.write_text(json.dumps(data, indent=4) + "\n", encoding="utf-8", newline="\n")
+            except Exception:
+                pass
+
+
+def bridge_ide_and_cli_brain_sessions(brain_dir: Path, session_ids: list[str]) -> Path:
+    """Bridge session folders between `~/.gemini/antigravity-cli/brain` (CLI) and
+    `~/.gemini/antigravity/brain` (VS Code extension `--app_data_dir=antigravity`) so
+    links in `PROJECT_HUB.md` open natively in both environments.
+    """
+    ide_brain = Path.home() / ".gemini" / "antigravity" / "brain"
+    cli_brain = Path.home() / ".gemini" / "antigravity-cli" / "brain"
+    try:
+        if brain_dir.resolve() == cli_brain.resolve() and ide_brain.parent.exists():
+            ide_brain.mkdir(parents=True, exist_ok=True)
+            for sid in session_ids:
+                if not sid:
+                    continue
+                src = cli_brain / sid
+                dst = ide_brain / sid
+                if src.exists() and not dst.exists() and not dst.is_symlink():
+                    try:
+                        os.symlink(src.resolve(), dst)
+                    except OSError:
+                        pass
+            return ide_brain
+    except Exception:
+        pass
+    return brain_dir
+
+
 def sync_all_targets(
     sessions: list[dict[str, Any]],
     canonical_images: dict[str, Path],
@@ -1062,6 +1146,8 @@ def sync_all_targets(
 ) -> list[Path]:
     """Ensure canonical artifacts exist in their origin `brain/<id>/` folder and generate `PROJECT_HUB.md`."""
     sorted_docs = sort_canonical_docs(canonical_mds)
+    all_sids = list({s["id"] for s in sessions} | set(target_session_ids) | {d["origin_sid"] for d in sorted_docs})
+    link_brain_dir = bridge_ide_and_cli_brain_sessions(brain_dir, all_sids)
 
     for doc in sorted_docs:
         raw_txt = doc["path"].read_text(encoding="utf-8", errors="ignore").replace("\r\n", "\n")
@@ -1133,7 +1219,12 @@ def sync_all_targets(
             orig_full = doc["origin_sid"]
             orig_link = f"[`{orig_full}`](conversation://{orig_full})"
             scope_col = f"{orig_link} (`{st['line_count']} lines`{vis_str})"
-            orig_brain_path = doc.get("brain_path") or (brain_dir / orig_full / md_name)
+            bridged_candidate = link_brain_dir / orig_full / md_name
+            orig_brain_path = (
+                bridged_candidate
+                if bridged_candidate.exists()
+                else (doc.get("brain_path") or (brain_dir / orig_full / md_name))
+            )
             orig_brain_norm = str(orig_brain_path).replace("\\", "/").lstrip("/")
             doc_col = f"[**`{md_name}`**](file:///{orig_brain_norm})"
             hub_lines.append(
@@ -1188,12 +1279,15 @@ def sync_all_targets(
             valid_authored = [a for a in (s.get("authored_docs") or []) if a in canonical_mds]
             doc_links: list[str] = []
             for a in valid_authored:
+                orig_sid_a = canonical_mds[a]["origin_sid"]
+                bridged_art = link_brain_dir / orig_sid_a / a
                 s_art_path = s["path"] / a
-                target_art = (
-                    s_art_path
-                    if s_art_path.exists()
-                    else (canonical_mds[a].get("brain_path") or (brain_dir / canonical_mds[a]["origin_sid"] / a))
-                )
+                if bridged_art.exists():
+                    target_art = bridged_art
+                elif s_art_path.exists():
+                    target_art = s_art_path
+                else:
+                    target_art = canonical_mds[a].get("brain_path") or (brain_dir / orig_sid_a / a)
                 target_norm = str(target_art).replace("\\", "/").lstrip("/")
                 doc_links.append(f"[`{a}`](file:///{target_norm})")
             docs_cell = " · ".join(doc_links) if doc_links else "—"
@@ -1350,6 +1444,7 @@ def run_sync(
     local_notes_dir.mkdir(parents=True, exist_ok=True)
 
     ensure_git_exclude(workspace, ".local-notes/")
+    ensure_vscode_editor_associations(workspace)
     git_state = collect_git_state(workspace)
     sessions, origin_map, authored_ts_map = scan_brain_sessions(brain_dir, workspace)
 
