@@ -1454,7 +1454,7 @@ def sync_all_targets(
                 ins_del = f" · `+{wt.get('insertions', 0)} / -{wt.get('deletions', 0)} lines`"
             file_pills: list[str] = []
             for fitem in (wt.get("files") or [])[:6]:
-                f_abs = str(fitem["abs"]).replace("\\", "/").lstrip("/")
+                f_abs = str(fitem["abs"]).replace("\\", "/").lstrip("/").replace(" ", "%20")
                 f_badge = fitem.get("badge") or fitem.get("status") or "modified"
                 if (workspace / fitem["rel"]).exists():
                     file_pills.append(f"[`{fitem['rel']}`](file:///{f_abs}) (`{f_badge}`)")
@@ -1470,7 +1470,7 @@ def sync_all_targets(
         if hot_files:
             hot_pills: list[str] = []
             for hf in hot_files:
-                hf_abs = str(hf["abs"]).replace("\\", "/").lstrip("/")
+                hf_abs = str(hf["abs"]).replace("\\", "/").lstrip("/").replace(" ", "%20")
                 hot_pills.append(
                     f"[`{hf['rel']}`](file:///{hf_abs}) (`{hf['ts_local']}` · `{hf['session_id'][:8]}`)"
                 )
