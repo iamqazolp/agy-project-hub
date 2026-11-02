@@ -310,7 +310,7 @@ def collect_git_state(workspace: Path) -> dict[str, Any]:
 
     commits_raw = run_git(
         workspace,
-        ["log", "--all", "--date=short", "--pretty=format:%h|%ad|%d|%s", "-n", "12"],
+        ["log", "--date=format:%Y-%m-%d %H:%M", "--pretty=format:%h|%ad|%d|%s", "-n", "8"],
     )
     commits = []
     for line in commits_raw.splitlines():
@@ -324,12 +324,65 @@ def collect_git_state(workspace: Path) -> dict[str, Any]:
                     "subject": parts[3],
                 }
             )
-    status = run_git(workspace, ["status", "-s"])
+    status = run_git(workspace, ["status", "--porcelain"])
+    modified_count = 0
+    added_count = 0
+    deleted_count = 0
+    untracked_count = 0
+    changed_files: list[dict[str, str]] = []
+    for sline in status.splitlines():
+        if len(sline) < 4:
+            continue
+        xy = sline[:2]
+        rel_path = sline[3:].strip().strip('"')
+        if " -> " in rel_path:
+            rel_path = rel_path.split(" -> ", 1)[1].strip().strip('"')
+        if rel_path.startswith(".local-notes"):
+            continue
+        if xy == "??":
+            untracked_count += 1
+            badge = "untracked"
+        elif "D" in xy:
+            deleted_count += 1
+            badge = "deleted"
+        elif "A" in xy:
+            added_count += 1
+            badge = "added"
+        else:
+            modified_count += 1
+            badge = "modified"
+        abs_p = (workspace / rel_path).resolve()
+        changed_files.append(
+            {
+                "rel": rel_path,
+                "abs": str(abs_p).replace("\\", "/").lstrip("/"),
+                "badge": badge,
+            }
+        )
+
+    diff_stat = run_git(workspace, ["diff", "HEAD", "--shortstat"]) or run_git(
+        workspace, ["diff", "--shortstat"]
+    )
+    ins_match = re.search(r"(\d+)\s+insertion", diff_stat)
+    del_match = re.search(r"(\d+)\s+deletion", diff_stat)
+    insertions = int(ins_match.group(1)) if ins_match else 0
+    deletions = int(del_match.group(1)) if del_match else 0
+
     return {
         "current_branch": current_branch,
         "branches": branches,
         "commits": commits,
         "status": status,
+        "working_tree": {
+            "clean": len(changed_files) == 0,
+            "modified": modified_count,
+            "added": added_count,
+            "deleted": deleted_count,
+            "untracked": untracked_count,
+            "insertions": insertions,
+            "deletions": deletions,
+            "files": changed_files,
+        },
     }
 
 
@@ -357,6 +410,8 @@ def utc_iso_to_local_str(iso_str: str, include_seconds: bool = False) -> str:
 
 
 def format_tokens(n: int) -> str:
+    if n >= 1_000_000:
+        return f"{n / 1_000_000.0:.2f}M"
     if n >= 1000:
         return f"{n / 1000.0:.1f}k"
     return str(n)
@@ -381,6 +436,7 @@ def scan_brain_sessions(
         for v in ws_variants
     ]
     ws_seg_pattern = re.compile(rf"/{re.escape(ws_name)}(?:/|[\"\'\s]|$)")
+    ws_norm_prefix = str(workspace.resolve()).replace("\\", "/").rstrip("/") + "/"
     sessions: list[dict[str, Any]] = []
     origin_map: dict[str, tuple[str, str]] = {}  # md_name -> (earliest_ts, session_id)
     latest_write_ts: dict[str, str] = {}  # md_name -> latest write_file ISO timestamp
@@ -397,12 +453,13 @@ def scan_brain_sessions(
             p
             for p in conv_dir.iterdir()
             if p.is_file()
-            and p.suffix.lower() in {".md", ".png", ".svg", ".html"}
+            and p.suffix.lower() in {".md", ".png", ".svg", ".html", ".pdf"}
             and p.name != "PROJECT_HUB.md"
         ]
         matched = bool(db_info.get("matched_workspace", False))
         user_prompts: list[dict[str, str]] = []
         authored_docs: set[str] = set()
+        touched_files: dict[str, dict[str, str]] = {}
         first_ts_iso = ""
         last_ts_iso = ""
         first_step: int | None = None
@@ -498,6 +555,16 @@ def scan_brain_sessions(
                                     .strip('"')
                                     .replace("\\", "/")
                                 )
+                                if path_str.startswith(ws_norm_prefix):
+                                    rel_f = path_str[len(ws_norm_prefix):]
+                                    if not rel_f.startswith((".local-notes/", ".git/", "__pycache__/")):
+                                        touched_files[rel_f] = {
+                                            "rel": rel_f,
+                                            "abs": path_str.lstrip("/"),
+                                            "ts_iso": created_at,
+                                            "ts_local": utc_iso_to_local_str(created_at, include_seconds=False),
+                                            "session_id": cid,
+                                        }
                                 if path_str.lower().endswith(".md"):
                                     bname = path_str.rsplit("/", 1)[-1]
                                     if bname not in {"PROJECT_HUB.md", "INDEX.md", "README.md", "SKILL.md"}:
@@ -563,6 +630,7 @@ def scan_brain_sessions(
                     "prompts": user_prompts[-8:],
                     "artifacts": top_files,
                     "authored_docs": sorted(authored_docs),
+                    "touched_files": touched_files,
                     "raw_head_snippet": raw_head_snippet,
                     "db_ancestry": db_info.get("ancestry") or [],
                     "subagent_parent_id": db_info.get("subagent_parent_id") or "",
@@ -1187,6 +1255,151 @@ def sync_all_targets(
     # Sort primary sessions chronologically by start time for the Fork Tree diagram
     primary_by_start = sorted(primary_sessions, key=lambda s: (s["first_step"], s["first_ts_iso"]))
     session_num_map = {s["id"]: i + 1 for i, s in enumerate(primary_by_start)}
+    sess_lookup = {s["id"]: s for s in sessions}
+
+    # Aggregate project-wide metrics for the Top-of-Hub General Dashboard
+    total_doc_lines = sum(d["stats"]["line_count"] for d in sorted_docs)
+    total_doc_visuals = sum(d["stats"]["visual_count"] for d in sorted_docs)
+    root_count = len({s["root_id"] for s in primary_sessions})
+    fork_count = sum(1 for s in primary_sessions if s.get("parent_id"))
+    total_chats = sum(s["user_chats"] for s in primary_sessions)
+    total_steps = sum(max(0, s["last_step"] - s["first_step"] + 1) for s in sessions)
+    total_output_tok = sum(s["total_output_tokens"] for s in sessions)
+
+    # Collect cross-session recently touched workspace files ("Hot Files")
+    merged_touched: dict[str, dict[str, str]] = {}
+    for s in sessions:
+        for rel_f, tinfo in (s.get("touched_files") or {}).items():
+            if rel_f in {"PROJECT_HUB.md", "INDEX.md"} or rel_f.startswith(".local-notes/"):
+                continue
+            if not (workspace / rel_f).exists():
+                continue
+            prev_t = merged_touched.get(rel_f)
+            if prev_t is None or (tinfo.get("ts_iso") or "") >= (prev_t.get("ts_iso") or ""):
+                merged_touched[rel_f] = tinfo
+    hot_files = sorted(
+        merged_touched.values(),
+        key=lambda x: x.get("ts_iso") or "",
+        reverse=True,
+    )[:5]
+
+    # Collect interactive HTML apps/visualizations and PDF exports across brain + workspace
+    rich_media_map: dict[str, dict[str, Any]] = {}
+    skip_dirs = {
+        ".local-notes",
+        ".git",
+        ".venv",
+        "venv",
+        "node_modules",
+        "__pycache__",
+        "dist",
+        "build",
+        "data",
+        "raw",
+        "datasets",
+        "corpus",
+        "cache",
+        "logs",
+        "tmp",
+        "coverage",
+        "htmlcov",
+    }
+    for s in sessions:
+        for art in s.get("artifacts") or []:
+            if art.is_symlink() or not art.is_file():
+                continue
+            ext = art.suffix.lower()
+            if ext in {".html", ".pdf"} and art.name.lower() != "index.html":
+                mtime = art.stat().st_mtime
+                prev_m = rich_media_map.get(art.name)
+                if prev_m is None or mtime > prev_m["mtime"]:
+                    rich_media_map[art.name] = {
+                        "name": art.name,
+                        "path": art.resolve(),
+                        "rel_label": f"brain/{s['id'][:8]}/{art.name}",
+                        "ext": ext,
+                        "mtime": mtime,
+                        "size_bytes": art.stat().st_size,
+                        "origin_sid": s["id"],
+                    }
+    if workspace.exists():
+        for root_dir, dirnames, filenames in os.walk(workspace):
+            rel_dir = Path(root_dir).resolve().relative_to(workspace.resolve())
+            depth = len(rel_dir.parts)
+            dirnames[:] = [
+                d
+                for d in dirnames
+                if d not in skip_dirs and not d.startswith(".") and not d.startswith("vscode-") and depth < 2
+            ]
+            for fname in filenames:
+                fpath = Path(root_dir) / fname
+                if fpath.is_symlink() or not fpath.is_file():
+                    continue
+                ext = fpath.suffix.lower()
+                if ext in {".html", ".pdf"} and fname.lower() not in {"index.html", "theme_preview.html"}:
+                    mtime = fpath.stat().st_mtime
+                    rel_str = str(fpath.resolve().relative_to(workspace.resolve())).replace("\\", "/")
+                    prev_m = rich_media_map.get(fname)
+                    if prev_m is None or mtime >= prev_m["mtime"] - 60:
+                        rich_media_map[fname] = {
+                            "name": fname,
+                            "path": fpath.resolve(),
+                            "rel_label": rel_str,
+                            "ext": ext,
+                            "mtime": mtime,
+                            "size_bytes": fpath.stat().st_size,
+                            "origin_sid": prev_m["origin_sid"] if prev_m else "",
+                        }
+    rich_media_list = sorted(
+        rich_media_map.values(),
+        key=lambda m: (0 if m["ext"] == ".html" else 1, -m["mtime"], m["name"]),
+    )
+
+    def _format_size(num_bytes: int) -> str:
+        if num_bytes >= 1024 * 1024:
+            return f"{num_bytes / (1024.0 * 1024.0):.1f} MB"
+        if num_bytes >= 1024:
+            return f"{num_bytes / 1024.0:.0f} KB"
+        return f"{num_bytes} B"
+
+    def _format_context_meter(s: dict[str, Any]) -> str:
+        cur_tok = s["current_ctx_tokens"]
+        peak_tok = s["peak_ctx_tokens"]
+        compacts = s["compaction_count"]
+        pct_1m = min(100, round(cur_tok / 1_000_000 * 100))
+        pct_256k = min(100, round(cur_tok / 256_000 * 100))
+        compact_str = f" · `{compacts}x compacted`" if compacts > 0 else ""
+        if peak_tok > 270_000:
+            filled = max(1 if cur_tok > 0 else 0, min(10, round(pct_1m / 10)))
+            bar = "▰" * filled + "▱" * (10 - filled)
+            dot = "🟠" if pct_1m >= 80 else ("🟡" if pct_1m >= 50 else "🟢")
+            advice = (
+                "Approaching 1M context limit — consider `/compact` or fork"
+                if pct_1m >= 80
+                else "1M context window active"
+            )
+            return (
+                f"{dot} `{bar}` **`{format_tokens(cur_tok)}`** active / `{format_tokens(peak_tok)}` peak "
+                f"(`{pct_1m}%` of `1M` window{compact_str}) — *{advice}*"
+            )
+        filled = max(1 if cur_tok > 0 else 0, min(10, round(pct_256k / 10)))
+        bar = "▰" * filled + "▱" * (10 - filled)
+        if cur_tok >= 185_000:
+            dot = "🟠"
+            advice = (
+                "Near 256k auto-compact ceiling (good checkpoint to `/compact` or fork on 256k tier; "
+                f"only `{pct_1m}%` used if on a 1M model)"
+            )
+        elif cur_tok >= 100_000:
+            dot = "🟡"
+            advice = f"Moderate context load (`{pct_256k}%` of 256k / `{pct_1m}%` of 1M)"
+        else:
+            dot = "🟢"
+            advice = f"Fresh context headroom (`{pct_256k}%` of 256k / `{pct_1m}%` of 1M)"
+        return (
+            f"{dot} `{bar}` **`{format_tokens(cur_tok)}`** active / `{format_tokens(peak_tok)}` peak "
+            f"(`{pct_256k}%` of `256k` compact · `{pct_1m}%` of `1M` max{compact_str}) — *{advice}*"
+        )
 
     for sid in target_session_ids:
         tdir = brain_dir / sid
@@ -1207,19 +1420,139 @@ def sync_all_targets(
                     except Exception:
                         pass
 
+        cur_sess = sess_lookup.get(sid) or (primary_sessions[0] if primary_sessions else None)
+        wt = git_state.get("working_tree") or {}
+        cur_branch = git_state.get("current_branch") or "detached"
+        active_branch_obj = next(
+            (b for b in (git_state.get("branches") or []) if b["name"] == cur_branch),
+            git_state["branches"][0] if git_state.get("branches") else None,
+        )
+        tip_sha = f" (`{active_branch_obj['sha']}`)" if active_branch_obj else ""
+        total_dirty = (
+            wt.get("modified", 0) + wt.get("added", 0) + wt.get("deleted", 0) + wt.get("untracked", 0)
+        )
+        wt_short_badge = "🟢 Clean" if wt.get("clean", True) else f"🟡 {total_dirty} uncommitted"
+        media_badge = f" · `{len(rich_media_list)} HTML/PDF`" if rich_media_list else ""
+
+        # Build Working Tree status line for the dashboard callout
+        if not git_state.get("branches") and wt.get("clean", True):
+            wt_line = "⚪ Not a Git repository (or no commits yet)"
+        elif wt.get("clean", True):
+            wt_line = f"🟢 Clean working tree on `{cur_branch}`{tip_sha}"
+        else:
+            dirty_parts: list[str] = []
+            if wt.get("modified"):
+                dirty_parts.append(f"`{wt['modified']} modified`")
+            if wt.get("added"):
+                dirty_parts.append(f"`{wt['added']} staged`")
+            if wt.get("deleted"):
+                dirty_parts.append(f"`{wt['deleted']} deleted`")
+            if wt.get("untracked"):
+                dirty_parts.append(f"`{wt['untracked']} untracked`")
+            ins_del = ""
+            if wt.get("insertions") or wt.get("deletions"):
+                ins_del = f" · `+{wt.get('insertions', 0)} / -{wt.get('deletions', 0)} lines`"
+            file_pills: list[str] = []
+            for fitem in (wt.get("files") or [])[:6]:
+                f_abs = str(fitem["abs"]).replace("\\", "/").lstrip("/")
+                f_badge = fitem.get("badge") or fitem.get("status") or "modified"
+                if (workspace / fitem["rel"]).exists():
+                    file_pills.append(f"[`{fitem['rel']}`](file:///{f_abs}) (`{f_badge}`)")
+                else:
+                    file_pills.append(f"`{fitem['rel']}` (`{f_badge}`)")
+            more_files = (
+                f" *(+{len(wt['files']) - 6} more)*" if len(wt.get("files") or []) > 6 else ""
+            )
+            files_suffix = f" — {' · '.join(file_pills)}{more_files}" if file_pills else ""
+            wt_line = f"🟡 **Dirty ({', '.join(dirty_parts)}{ins_del})**{files_suffix}"
+
+        # Build Hot Files line for the dashboard callout
+        if hot_files:
+            hot_pills: list[str] = []
+            for hf in hot_files:
+                hf_abs = str(hf["abs"]).replace("\\", "/").lstrip("/")
+                hot_pills.append(
+                    f"[`{hf['rel']}`](file:///{hf_abs}) (`{hf['ts_local']}` · `{hf['session_id'][:8]}`)"
+                )
+            hot_files_line = " · ".join(hot_pills)
+        else:
+            hot_files_line = "*(No workspace source code edits recorded in session transcripts yet)*"
+
+        # Latest updated doc & latest user prompt across all primary sessions
+        latest_doc_line = "—"
+        if sorted_docs:
+            ld = sorted_docs[0]
+            ld_bridged = link_brain_dir / ld["origin_sid"] / ld["name"]
+            ld_path = (
+                ld_bridged
+                if ld_bridged.exists()
+                else (ld.get("brain_path") or (brain_dir / ld["origin_sid"] / ld["name"]))
+            )
+            ld_norm = str(ld_path).replace("\\", "/").lstrip("/")
+            latest_doc_line = (
+                f"[**`{ld['name']}`**](file:///{ld_norm}) "
+                f"(`{ld['updated_str']}` · `{ld['stats']['line_count']} lines` · `{ld['origin_sid'][:8]}`)"
+            )
+
+        latest_prompt_entry: tuple[str, str, str, int] | None = None
+        for s in primary_sessions:
+            if s.get("prompts"):
+                lp = s["prompts"][-1]
+                cand = (lp["timestamp"], s["id"], " ".join(lp["text"].splitlines()), lp["step"])
+                if latest_prompt_entry is None or cand[0] >= latest_prompt_entry[0]:
+                    latest_prompt_entry = cand
+
+        if cur_sess:
+            c_tnum = cur_sess.get("tree_num", 1)
+            c_title = f" *({cur_sess['title']})*" if cur_sess.get("title") else ""
+            if cur_sess.get("parent_id"):
+                c_role = f"🔀 Fork (d={cur_sess.get('fork_depth', 1)}) of `{cur_sess['parent_id'][:8]}` @ `step {cur_sess['fork_step']}`"
+            else:
+                c_role = "🌱 Root Session (`step 0`)"
+            active_sess_line = f"`{cur_sess['id']}` — `Tree #{c_tnum}` · {c_role}{c_title} · *Synced `{now_str}` (`0` LLM tokens)*"
+            ctx_meter_line = _format_context_meter(cur_sess)
+        else:
+            active_sess_line = f"`{sid}` · *Synced `{now_str}` (`0` LLM tokens)*"
+            ctx_meter_line = "—"
+
         hub_lines = [
             f"# ⚡ `{workspace.name}` — Multi-Session & Fork Command Center",
             "",
-            "> [!TIP]",
-            f"> **Zero-Context-Overhead Sync:** All {len(sorted_docs)} project guides and {len(sessions)} session/fork logs are indexed in this session's native artifact hub (`{sid}`) by an external Python script (`0` LLM tokens used). Click any document below to open the original brain artifact in **Antigravity's native styled Artifact Viewer**.",
-            "",
-            "---",
-            "",
-            f"## 1. Synced Project Knowledge Base ({len(sorted_docs)} Native Artifacts)",
-            "",
-            "| Category | Timestamp | Document (Click for Native View) | Summary & Purpose | Key Sections | Origin Session (Full ID) |",
+            "| 📚 Knowledge Base | 🌱 Primary Sessions | 🤖 Subagents | 💬 Prompt Turns | 🧠 Cumulative Output | 🌿 Active Git Branch |",
             "| :--- | :--- | :--- | :--- | :--- | :--- |",
+            (
+                f"| **`{len(sorted_docs)} docs`** (`{total_doc_lines:,} lines` · `{total_doc_visuals} visuals`{media_badge}) "
+                f"| **`{len(primary_sessions)}`** (`{root_count} root` · `{fork_count} fork{'s' if fork_count != 1 else ''}`) "
+                f"| **`{len(subagent_sessions)}`** background run{'s' if len(subagent_sessions) != 1 else ''} "
+                f"| **`{total_chats} chats`** (`{total_steps:,} steps`) "
+                f"| **`{format_tokens(total_output_tok)}`** generated "
+                f"| `{cur_branch}`{tip_sha} · {wt_short_badge} |"
+            ),
+            "",
+            "> [!NOTE]",
+            f"> - **Active Session:** {active_sess_line}",
+            f"> - **Context Meter (`256k` / `1M`):** {ctx_meter_line}",
+            f"> - **Working Tree:** {wt_line}",
+            f"> - **Recently Touched Code:** {hot_files_line}",
+            f"> - **Latest Updated Guide:** {latest_doc_line}",
         ]
+        if latest_prompt_entry is not None:
+            lp_ts, lp_sid, lp_txt, lp_step = latest_prompt_entry
+            hub_lines.append(
+                f"> - **Latest Prompt (`{lp_ts}` · `{lp_sid[:8]}` · `step #{lp_step}`):** *{lp_txt}*"
+            )
+
+        hub_lines.extend(
+            [
+                "",
+                "---",
+                "",
+                f"## 1. Synced Project Knowledge Base ({len(sorted_docs)} Native Artifacts)",
+                "",
+                "| Category | Timestamp | Document (Click for Native View) | Summary & Purpose | Key Sections | Origin Session (Full ID) |",
+                "| :--- | :--- | :--- | :--- | :--- | :--- |",
+            ]
+        )
 
         for doc in sorted_docs:
             md_name = doc["name"]
@@ -1243,7 +1576,24 @@ def sync_all_targets(
                 f"| **{cat}** | `{doc['updated_str']}` | {doc_col} | {purpose} | {h2_badges} | {scope_col} |"
             )
 
-        root_count = len({s["root_id"] for s in primary_sessions})
+        if rich_media_list:
+            hub_lines.extend(
+                [
+                    "",
+                    f"### 🎨 Interactive HTML Apps & PDF Exports ({len(rich_media_list)} File{'s' if len(rich_media_list) != 1 else ''})",
+                    "",
+                    "| Type | Updated | File (Click to Open) | Workspace / Brain Path | Size |",
+                    "| :--- | :--- | :--- | :--- | :--- |",
+                ]
+            )
+            for m in rich_media_list:
+                m_type = "🌐 **Interactive HTML**" if m["ext"] == ".html" else "📄 **PDF Document**"
+                m_ts = dt.datetime.fromtimestamp(m["mtime"]).strftime("%Y-%m-%d %H:%M")
+                m_norm = str(m["path"]).replace("\\", "/").lstrip("/")
+                m_link = f"[**`{m['name']}`**](file:///{m_norm})"
+                m_sz = _format_size(m["size_bytes"])
+                hub_lines.append(f"| {m_type} | `{m_ts}` | {m_link} | `{m['rel_label']}` | `{m_sz}` |")
+
         sub_header_suffix = (
             f" · {len(subagent_sessions)} Subagent Run{'s' if len(subagent_sessions) != 1 else ''}"
             if subagent_sessions
@@ -1456,7 +1806,7 @@ def sync_all_targets(
             [
                 "---",
                 "",
-                "## 4. Git Branches & Tip Commits",
+                "## 4. Git Branches, Working Tree & Recent Commits",
                 "",
                 "| Branch | Tip Commit | Subject |",
                 "| :--- | :--- | :--- |",
@@ -1465,6 +1815,22 @@ def sync_all_targets(
         for b in git_state["branches"]:
             marker = " **(active)**" if b["name"] == git_state["current_branch"] else ""
             hub_lines.append(f"| `{b['name']}`{marker} | `{b['sha']}` | {b['subject']} |")
+
+        if git_state.get("commits"):
+            hub_lines.extend(
+                [
+                    "",
+                    f"### Recent Commits on `{cur_branch}` (Last {len(git_state['commits'])})",
+                    "",
+                    "| Timestamp | Commit | Refs | Subject |",
+                    "| :--- | :--- | :--- | :--- |",
+                ]
+            )
+            for c in git_state["commits"]:
+                refs_cell = f"`{c['refs']}`" if c.get("refs") else "—"
+                hub_lines.append(
+                    f"| `{c['date']}` | `{c['sha']}` | {refs_cell} | {c['subject']} |"
+                )
 
         hub_lines.extend(
             [
