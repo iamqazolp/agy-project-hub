@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Install or update the `local-recap` skill and the `Antigravity Markdown Review` VS Code extension."""
+"""Install or update the `local-recap` skill (`agy-project-hub`) and VS Code / Crossnote styling."""
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shutil
@@ -16,9 +17,42 @@ EXT_VERSION = "1.0.0"
 EXT_DIR_NAME = f"{EXT_ID}-{EXT_VERSION}"
 
 
+def _install_item(src: Path, dst: Path, use_symlink: bool = True) -> str:
+    """Install a file or directory from `src` to `dst` using a symlink (default) or physical copy."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    src_resolved = src.resolve()
+    if dst.is_symlink() or dst.exists():
+        try:
+            if use_symlink and dst.is_symlink() and dst.resolve() == src_resolved:
+                return "symlink (up-to-date)"
+        except Exception:
+            pass
+        if dst.is_symlink() or dst.is_file():
+            dst.unlink(missing_ok=True)
+        elif dst.is_dir():
+            shutil.rmtree(dst)
+
+    if use_symlink:
+        try:
+            os.symlink(src_resolved, dst)
+            return "symlink"
+        except OSError:
+            pass
+
+    if src_resolved.is_dir():
+        shutil.copytree(
+            src_resolved,
+            dst,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"),
+        )
+    else:
+        shutil.copy2(src_resolved, dst)
+    return "copy"
+
+
 def install_vscode_extension(repo_root: Path) -> list[Path]:
     """Install the bundled `vscode-extension` into `~/.vscode/extensions/` (and Cursor/Antigravity if present)
-    and register it in `extensions.json`. Also pre-syncs Markdown Preview Enhanced (`~/.local/state/crossnote`).
+    and pre-sync Markdown Preview Enhanced (`~/.local/state/crossnote/style.less`).
     """
     ext_src = repo_root / "vscode-extension"
     if not ext_src.exists():
@@ -42,7 +76,6 @@ def install_vscode_extension(repo_root: Path) -> list[Path]:
         shutil.copytree(ext_src, target)
         installed_paths.append(target)
 
-        # Register in extensions.json if present
         manifest_path = root / "extensions.json"
         entries: list = []
         if manifest_path.exists():
@@ -85,7 +118,6 @@ def install_vscode_extension(repo_root: Path) -> list[Path]:
         )
         manifest_path.write_text(json.dumps(entries), encoding="utf-8", newline="\n")
 
-    # Also pre-sync Crossnote (Markdown Preview Enhanced) style.less if crossnote is used
     try:
         crossnote_dir = home / ".local" / "state" / "crossnote"
         crossnote_dir.mkdir(parents=True, exist_ok=True)
@@ -109,8 +141,8 @@ def install_vscode_extension(repo_root: Path) -> list[Path]:
 
 
 def configure_vscode_editor_associations() -> list[Path]:
-    """Configure VS Code's `workbench.editorAssociations` so Markdown files and `.local-notes/*.md`
-    shortcuts open in Antigravity style by default.
+    """Configure VS Code's `workbench.editorAssociations` so `.local-notes/*.md` and `brain/**/*.md`
+    open in `antigravity.artifactEditor` (preserving native KaTeX math rendering).
     """
     home = Path.home()
     candidates: list[Path] = []
@@ -137,9 +169,8 @@ def configure_vscode_editor_associations() -> list[Path]:
         ]
 
     desired = {
-        "*.md": "antigravity.markdownReview",
-        "**/.local-notes/*.md": "antigravity.markdownReview",
-        "**/.local-notes/**/*.md": "antigravity.markdownReview",
+        "**/.local-notes/*.md": "antigravity.artifactEditor",
+        "**/.local-notes/**/*.md": "antigravity.artifactEditor",
         "**/.gemini/*/brain/**/*.md": "antigravity.artifactEditor",
     }
 
@@ -159,6 +190,9 @@ def configure_vscode_editor_associations() -> list[Path]:
         if not isinstance(assoc, dict):
             assoc = {}
         changed = False
+        if assoc.get("*.md") == "antigravity.markdownReview":
+            assoc["*.md"] = "antigravity.artifactEditor"
+            changed = True
         for pattern, editor_id in desired.items():
             if assoc.get(pattern) != editor_id:
                 assoc[pattern] = editor_id
@@ -218,32 +252,43 @@ def register_lifecycle_hooks(config_root: Path, py_cmd: str, installed_script: P
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Install or update the local-recap skill (agy-project-hub)")
+    parser.add_argument(
+        "--copy",
+        action="store_true",
+        help="Copy files instead of creating symlinks into ~/.gemini/config/skills/local-recap",
+    )
+    args = parser.parse_args()
+    use_symlink = not args.copy
+
     repo_root = Path(__file__).resolve().parent
     config_root = Path.home() / ".gemini" / "config"
     target_dir = config_root / "skills" / "local-recap"
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    items = [
-        ("SKILL.md", target_dir / "SKILL.md"),
+    # Link or copy the modular package, CLI entrypoint, and HTML template
+    linked_items = [
+        ("scripts/local_recap", target_dir / "scripts" / "local_recap"),
         ("scripts/sync_local_notes.py", target_dir / "scripts" / "sync_local_notes.py"),
         ("resources/viz_template.html", target_dir / "resources" / "viz_template.html"),
     ]
-    for rel_src, dst in items:
-        src = repo_root / rel_src
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        if src.resolve() != dst.resolve():
-            shutil.copy2(src, dst)
-        print(f"Installed: {dst}")
+    for rel_src, dst in linked_items:
+        mode = _install_item(repo_root / rel_src, dst, use_symlink=use_symlink)
+        print(f"Installed ({mode}): {dst}")
 
+    # Write SKILL.md (physical file so platform-specific python path substitution never mutates repo)
     installed_skill_md = target_dir / "SKILL.md"
+    if installed_skill_md.is_symlink():
+        installed_skill_md.unlink(missing_ok=True)
     installed_script = target_dir / "scripts" / "sync_local_notes.py"
     py_cmd = "python" if os.name == "nt" else "python3"
-    skill_text = installed_skill_md.read_text(encoding="utf-8", errors="ignore")
+    skill_text = (repo_root / "SKILL.md").read_text(encoding="utf-8", errors="ignore")
     skill_text = skill_text.replace(
         'python3 "$HOME/.gemini/config/skills/local-recap/scripts/sync_local_notes.py"',
         f'{py_cmd} "{installed_script}"',
     )
     installed_skill_md.write_text(skill_text, encoding="utf-8", newline="\n")
+    print(f"Installed (file): {installed_skill_md}")
 
     hooks_file = register_lifecycle_hooks(config_root, py_cmd, installed_script)
     print(f"Configured auto-sync hooks: {hooks_file}")
@@ -254,7 +299,7 @@ def main() -> None:
     for vs_cfg in configure_vscode_editor_associations():
         print(f"Configured Antigravity Markdown associations: {vs_cfg}")
 
-    print(f"\nSkill 'local-recap' and 'Antigravity Markdown Review' extension are ready!")
+    print("\nSkill 'local-recap' (modular package) is ready with zero repo-to-skill drift!")
 
 
 if __name__ == "__main__":

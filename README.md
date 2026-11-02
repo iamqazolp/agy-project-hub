@@ -28,9 +28,10 @@ Nevermind, just ask your Antigravity agent to install the skill for you. You jus
 
 Once installed, everything syncs automatically at the end of each turn. Just open `.local-notes/PROJECT_HUB.md` from your VS Code file explorer to see:
 
-1. **Knowledge Base:** Every Markdown note and visualization across all sessions for the project, grouped into Recaps, Deep Dives, and Specs/Plans.
-2. **Session & Fork Telemetry:** A Mermaid fork tree and table showing every root session, fork, and subagent, along with active/peak context usage, chat counts, and clickable `conversation://` links.
-3. **Recent Prompts & Git State:** The last few prompts per session so you remember what each fork was doing, plus current branch tips.
+1. **Top-of-Hub General Dashboard:** A 1-row Project Scorecard (`📚 Knowledge Base`, `🌱 Primary Sessions`, `🤖 Subagents`, `💬 Prompt Turns`, `🧠 Cumulative Output`, `🌿 Active Git Branch`) plus a live status callout with a **Visual Context Meter (`256k` / `1M`)**, **Live Working Tree & Uncommitted Diff Strip**, **Recently Touched Code ("Hot Files")**, **Latest Updated Guide**, and **Latest User Prompt**.
+2. **Knowledge Base & HTML/PDF Index:** Every Markdown note and interactive HTML/PDF export across all sessions for the project, grouped into Recaps, Deep Dives, and Specs/Plans.
+3. **Session & Fork Telemetry:** A spacious multi-line Mermaid fork forest and table showing every root session and fork (with background subagent runs neatly tucked into collapsible `<details>` dropdowns) and selectable inline-code session IDs.
+4. **Recent Prompts, Branches & Commits:** The last 5 prompts per session plus local Git branches and the last 8 commits on the active branch.
 
 You can also ask the agent directly in chat:
 - *"Recap our progress across all sessions"*
@@ -50,15 +51,26 @@ When you have multiple root sessions and forks on the same repo, `sync_local_not
 2. **Transcript references:** Falls back to scanning opening context summaries in `transcript.jsonl` if the `.db` entry isn't available.
 3. **Token + timestamp fingerprinting:** Matches cumulative token counts (`input + cache_read + output`) at the fork step against candidate parent sessions.
 
-## Files
+## Architecture
 
 ```text
 agy-project-hub/
-├── SKILL.md                      # Skill instructions loaded by Antigravity (~22 lines)
-├── install.py                    # Installs the skill, hooks, and VS Code extension
+├── SKILL.md                      # Skill instructions loaded by Antigravity (~17 lines)
+├── install.py                    # Symlinks the skill package into ~/.gemini/config/skills/local-recap
 ├── README.md                     # This file
 ├── scripts/
-│   └── sync_local_notes.py       # Background sync & lineage reconstruction script
+│   ├── sync_local_notes.py       # Thin CLI entrypoint & backwards-compatible façade
+│   └── local_recap/              # Modular Python package
+│       ├── __init__.py
+│       ├── models.py             # Typed @dataclass models & formatting helpers
+│       ├── git_telemetry.py      # Branch tips, recent commits, & working tree diff state
+│       ├── sqlite_metadata.py    # SQLite conversation_summaries.db & protobuf lineage decoder
+│       ├── transcript_scanner.py # Transcript parser & Multi-Root Fork/Subagent Forest builder
+│       ├── artifact_sync.py      # Canonical Markdown/HTML/PDF discovery & .local-notes/ shortcuts
+│       ├── hub_renderer.py       # General Dashboard, 256k/1M context meter, & PROJECT_HUB.md renderer
+│       └── cli.py                # CLI parser, workspace sync runner, & lifecycle hook handler
+├── tests/
+│   └── test_local_recap.py       # Unit & end-to-end integration test suite
 ├── resources/
 │   └── viz_template.html         # HTML template for standalone diagrams
 └── vscode-extension/             # "Antigravity Markdown Review" VS Code extension
