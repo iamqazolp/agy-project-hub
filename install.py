@@ -32,6 +32,17 @@ def install_vscode_extension(repo_root: Path) -> list[Path]:
     ]
 
     installed_paths: list[Path] = []
+    # Locate a local mermaid.min.js if available in existing VS Code extensions to bundle into media/
+    local_mermaid_js: Path | None = None
+    for ext_root_cand in ext_roots:
+        if ext_root_cand.exists():
+            for match in ext_root_cand.glob("**/mermaid.min.js"):
+                if match.is_file():
+                    local_mermaid_js = match
+                    break
+        if local_mermaid_js:
+            break
+
     for idx, root in enumerate(ext_roots):
         if idx > 0 and not root.exists():
             continue
@@ -40,6 +51,11 @@ def install_vscode_extension(repo_root: Path) -> list[Path]:
         if target.exists():
             shutil.rmtree(target)
         shutil.copytree(ext_src, target)
+        if local_mermaid_js and not (target / "media" / "mermaid.min.js").exists():
+            try:
+                shutil.copy2(local_mermaid_js, target / "media" / "mermaid.min.js")
+            except Exception:
+                pass
         installed_paths.append(target)
 
         # Register in extensions.json if present

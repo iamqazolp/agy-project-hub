@@ -100,14 +100,18 @@ function postprocessAlertsInHtml(html) {
     }
   );
 
-  // Unwrap <code class="language-mermaid"><pre class="mermaid" style="all: unset;">...
-  // emitted by bierner.markdown-mermaid inside markdown-it so it never matches :not(pre) > code
+  // Unwrap <pre class="mermaid" style="all: unset;"> or <code class="language-mermaid">
+  // emitted by bierner.markdown-mermaid inside markdown-it
   out = out.replace(
     /<code[^>]*class=["'][^"']*language-mermaid[^"']*["'][^>]*>\s*<pre[^>]*class=["'][^"']*mermaid[^"']*["'][^>]*>([\s\S]*?)<\/pre>\s*<\/code>/gi,
     '<div class="agy-mermaid-container"><div class="mermaid">$1</div></div>'
   );
   out = out.replace(
     /<pre[^>]*>\s*<code[^>]*class=["'][^"']*language-mermaid[^"']*["'][^>]*>([\s\S]*?)<\/code>\s*<\/pre>/gi,
+    '<div class="agy-mermaid-container"><div class="mermaid">$1</div></div>'
+  );
+  out = out.replace(
+    /<pre[^>]*class=["'][^"']*mermaid[^"']*["'][^>]*>([\s\S]*?)<\/pre>/gi,
     '<div class="agy-mermaid-container"><div class="mermaid">$1</div></div>'
   );
   return out;

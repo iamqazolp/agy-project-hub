@@ -697,3 +697,14 @@ body.agy-review-body img,
   overflow-x: auto;
   text-align: center;
 }
+
+.agy-mermaid-container svg {
+  max-width: 100% !important;
+  height: auto !important;
+}
+
+pre.mermaid {
+  display: block !important;
+  white-space: pre !important;
+  font-family: var(--agy-font-mono) !important;
+}
