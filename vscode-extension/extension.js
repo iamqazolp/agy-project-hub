@@ -82,7 +82,7 @@ function preprocessCarousels(markdownText) {
 }
 
 function postprocessAlertsInHtml(html) {
-  return String(html || "").replace(
+  let out = String(html || "").replace(
     /<blockquote>\s*<p>\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?:\s*<br\s*\/?>|\s*\n|\s+)?([\s\S]*?)<\/blockquote>/gi,
     (_, rawType, innerRest) => {
       const type = rawType.toLowerCase();
@@ -99,6 +99,48 @@ function postprocessAlertsInHtml(html) {
       );
     }
   );
+
+  // Unwrap <code class="language-mermaid"><pre class="mermaid" style="all: unset;">...
+  // emitted by bierner.markdown-mermaid inside markdown-it so it never matches :not(pre) > code
+  out = out.replace(
+    /<code[^>]*class=["'][^"']*language-mermaid[^"']*["'][^>]*>\s*<pre[^>]*class=["'][^"']*mermaid[^"']*["'][^>]*>([\s\S]*?)<\/pre>\s*<\/code>/gi,
+    '<div class="agy-mermaid-container"><div class="mermaid">$1</div></div>'
+  );
+  out = out.replace(
+    /<pre[^>]*>\s*<code[^>]*class=["'][^"']*language-mermaid[^"']*["'][^>]*>([\s\S]*?)<\/code>\s*<\/pre>/gi,
+    '<div class="agy-mermaid-container"><div class="mermaid">$1</div></div>'
+  );
+  return out;
+}
+
+function findMermaidBundlePath() {
+  try {
+    const ext = vscode.extensions.getExtension("bierner.markdown-mermaid");
+    if (ext && ext.extensionPath) {
+      const candidate = path.join(ext.extensionPath, "dist-preview", "index.bundle.js");
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  } catch (_) {}
+
+  try {
+    const extRoot = path.join(os.homedir(), ".vscode", "extensions");
+    if (fs.existsSync(extRoot)) {
+      const dirs = fs
+        .readdirSync(extRoot)
+        .filter((d) => d.startsWith("bierner.markdown-mermaid-"))
+        .sort()
+        .reverse();
+      for (const d of dirs) {
+        const candidate = path.join(extRoot, d, "dist-preview", "index.bundle.js");
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
+      }
+    }
+  } catch (_) {}
+  return null;
 }
 
 class AntigravityMarkdownReviewProvider {
@@ -116,12 +158,16 @@ class AntigravityMarkdownReviewProvider {
   async resolveCustomEditor(document, webviewPanel) {
     const webview = webviewPanel.webview;
     const info = resolveRealFileInfo(document.uri);
+    const mermaidBundlePath = findMermaidBundlePath();
     const localRoots = [
       vscode.Uri.joinPath(this.context.extensionUri, "media"),
       vscode.Uri.file(path.dirname(info.fsPath)),
       vscode.Uri.file(path.dirname(info.realPath)),
       vscode.Uri.file(os.homedir())
     ];
+    if (mermaidBundlePath) {
+      localRoots.push(vscode.Uri.file(path.dirname(mermaidBundlePath)));
+    }
     if (vscode.workspace.workspaceFolders) {
       for (const wf of vscode.workspace.workspaceFolders) {
         localRoots.push(wf.uri);
@@ -162,6 +208,16 @@ class AntigravityMarkdownReviewProvider {
       const jsUri = webview.asWebviewUri(
         vscode.Uri.joinPath(this.context.extensionUri, "media", "antigravity-markdown.js")
       );
+      const mermaidUri = mermaidBundlePath
+        ? webview.asWebviewUri(vscode.Uri.file(mermaidBundlePath))
+        : null;
+
+      const themeKind = vscode.window.activeColorTheme
+        ? vscode.window.activeColorTheme.kind
+        : vscode.ColorThemeKind.Dark;
+      const isLightTheme =
+        themeKind === vscode.ColorThemeKind.Light ||
+        themeKind === vscode.ColorThemeKind.HighContrastLight;
 
       const displayPath = info.isSymlink
         ? `${path.basename(info.fsPath)} → ${shortenHome(info.realPath)}`
@@ -170,6 +226,8 @@ class AntigravityMarkdownReviewProvider {
       webview.html = buildWebviewHtml({
         cssUri,
         jsUri,
+        mermaidUri,
+        isLightTheme,
         renderedHtml,
         displayPath,
         isBrainArtifact: info.isBrainArtifact,
@@ -181,7 +239,7 @@ class AntigravityMarkdownReviewProvider {
 
     const disposables = [];
 
-    // Watch text document changes in VS Code
+    // Watch text document changes and color theme changes in VS Code
     disposables.push(
       vscode.workspace.onDidChangeTextDocument((e) => {
         if (
@@ -190,6 +248,9 @@ class AntigravityMarkdownReviewProvider {
         ) {
           renderToWebview();
         }
+      }),
+      vscode.window.onDidChangeActiveColorTheme(() => {
+        renderToWebview();
       })
     );
 
@@ -374,13 +435,24 @@ function escapeHtml(s) {
     .replace(/>/g, "&gt;");
 }
 
-function buildWebviewHtml({ cssUri, jsUri, renderedHtml, displayPath, isBrainArtifact, isSymlink }) {
+function buildWebviewHtml({
+  cssUri,
+  jsUri,
+  mermaidUri,
+  isLightTheme,
+  renderedHtml,
+  displayPath,
+  isBrainArtifact,
+  isSymlink
+}) {
   const brainBadge = isBrainArtifact
     ? `<span class="agy-badge agy-badge-brain" title="Synced with Antigravity Brain">${isSymlink ? "Brain Shortcut" : "Brain Artifact"}</span>`
     : "";
   const nativeBtn = isBrainArtifact
     ? `<button type="button" class="agy-btn" id="btn-native" title="Open in Native Antigravity Artifact Viewer">Native Viewer ↗</button>`
     : "";
+  const themeClass = isLightTheme ? "vscode-light" : "vscode-dark";
+  const mermaidScriptTag = mermaidUri ? `<script src="${mermaidUri}"></script>` : "";
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -390,7 +462,7 @@ function buildWebviewHtml({ cssUri, jsUri, renderedHtml, displayPath, isBrainArt
   <link rel="stylesheet" href="${cssUri}" />
   <title>Antigravity Markdown Review</title>
 </head>
-<body class="agy-review-body vscode-dark">
+<body class="agy-review-body ${themeClass}">
   <div class="agy-toolbar">
     <div class="agy-toolbar-left">
       <span class="agy-badge">✦ Antigravity Review</span>
@@ -407,6 +479,7 @@ function buildWebviewHtml({ cssUri, jsUri, renderedHtml, displayPath, isBrainArt
   <main class="agy-review-container" id="agy-content">
     ${renderedHtml}
   </main>
+  ${mermaidScriptTag}
   <script src="${jsUri}"></script>
   <script>
     (function() {
@@ -532,6 +605,9 @@ function extendMarkdownItWithAntigravity(md) {
   md.renderer.rules.fence = function (tokens, idx, options, env, self) {
     const token = tokens[idx];
     const info = (token.info || "").trim().toLowerCase();
+    if (info === "mermaid") {
+      return `<div class="agy-mermaid-container"><div class="mermaid">${escapeHtml(token.content)}</div></div>`;
+    }
     if (info === "carousel") {
       const slides = (token.content || "")
         .split(/<!--\s*slide\s*-->/i)

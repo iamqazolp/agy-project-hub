@@ -378,9 +378,9 @@ a.agy-conv-link:hover {
 /* --------------------------------------------------------------------------
    Inline Code & Code Blocks (Matches Antigravity Okaidia + rounded-xl container)
    -------------------------------------------------------------------------- */
-body.vscode-body :not(pre) > code,
-body.agy-review-body :not(pre) > code,
-.markdown-preview.markdown-preview :not(pre) > code {
+body.vscode-body :not(pre) > code:not(.language-mermaid),
+body.agy-review-body :not(pre) > code:not(.language-mermaid),
+.markdown-preview.markdown-preview :not(pre) > code:not(.language-mermaid) {
   font-family: var(--agy-font-mono) !important;
   font-size: 0.88em !important;
   background-color: var(--agy-muted) !important;
@@ -391,8 +391,15 @@ body.agy-review-body :not(pre) > code,
   word-break: break-word;
 }
 
-body.vscode-light :not(pre) > code {
+body.vscode-light :not(pre) > code:not(.language-mermaid) {
   border-color: rgba(15, 23, 42, 0.08) !important;
+}
+
+code.language-mermaid {
+  display: block !important;
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
 }
 
 .agy-code-block {
@@ -442,9 +449,9 @@ body.vscode-light :not(pre) > code {
   color: var(--agy-fg);
 }
 
-body.vscode-body pre,
-body.agy-review-body pre,
-.markdown-preview.markdown-preview pre {
+body.vscode-body pre:not(.mermaid),
+body.agy-review-body pre:not(.mermaid),
+.markdown-preview.markdown-preview pre:not(.mermaid) {
   font-family: var(--agy-font-mono) !important;
   font-size: 12.5px !important;
   line-height: 1.55 !important;

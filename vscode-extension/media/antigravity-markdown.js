@@ -277,9 +277,34 @@
     });
   }
 
+  function transformMermaidBlocks(root) {
+    let unwrapped = false;
+    root.querySelectorAll("code.language-mermaid").forEach((codeEl) => {
+      const innerPre = codeEl.querySelector("pre.mermaid, .mermaid");
+      const raw = innerPre ? innerPre.textContent : codeEl.textContent;
+      const container = document.createElement("div");
+      container.className = "agy-mermaid-container";
+      const mermaidDiv = document.createElement("div");
+      mermaidDiv.className = "mermaid";
+      mermaidDiv.textContent = (raw || "").trim();
+      container.appendChild(mermaidDiv);
+
+      const target =
+        codeEl.parentElement && codeEl.parentElement.tagName === "PRE"
+          ? codeEl.parentElement
+          : codeEl;
+      target.replaceWith(container);
+      unwrapped = true;
+    });
+    if (unwrapped) {
+      window.dispatchEvent(new CustomEvent("vscode.markdown.updateContent"));
+    }
+  }
+
   function enhanceAll() {
     const root = document.body;
     if (!root) return;
+    transformMermaidBlocks(root);
     transformAlerts(root);
     transformTables(root);
     transformCodeBlocks(root);
