@@ -351,6 +351,9 @@ body.agy-review-body :not(pre) > code,
   border-radius: 0.25rem !important;
   border: 1px solid rgba(255, 255, 255, 0.06) !important;
   word-break: break-word;
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  cursor: text;
 }
 
 body.vscode-light :not(pre) > code {
