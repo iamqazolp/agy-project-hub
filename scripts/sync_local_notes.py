@@ -1172,9 +1172,21 @@ def sync_all_targets(
     now_str = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cur_branch = git_state["current_branch"]
 
-    # Sort sessions chronologically by start time for the Fork Tree diagram, and by last_active for table
-    sessions_by_start = sorted(sessions, key=lambda s: (s["first_step"], s["first_ts_iso"]))
-    session_num_map = {s["id"]: i + 1 for i, s in enumerate(sessions_by_start)}
+    # Separate primary user sessions (roots + forks) from background subagent runs
+    primary_sessions = [s for s in sessions if not s.get("is_subagent")]
+    subagent_sessions = [s for s in sessions if s.get("is_subagent")]
+    if not primary_sessions:
+        primary_sessions = list(sessions)
+        subagent_sessions = []
+
+    subagents_by_parent: dict[str, list[dict[str, Any]]] = {}
+    for sub in subagent_sessions:
+        pid = sub.get("parent_id") or ""
+        subagents_by_parent.setdefault(pid, []).append(sub)
+
+    # Sort primary sessions chronologically by start time for the Fork Tree diagram
+    primary_by_start = sorted(primary_sessions, key=lambda s: (s["first_step"], s["first_ts_iso"]))
+    session_num_map = {s["id"]: i + 1 for i, s in enumerate(primary_by_start)}
 
     for sid in target_session_ids:
         tdir = brain_dir / sid
@@ -1231,20 +1243,25 @@ def sync_all_targets(
                 f"| **{cat}** | `{doc['updated_str']}` | {doc_col} | {purpose} | {h2_badges} | {scope_col} |"
             )
 
-        root_count = len({s["root_id"] for s in sessions})
+        root_count = len({s["root_id"] for s in primary_sessions})
+        sub_header_suffix = (
+            f" · {len(subagent_sessions)} Subagent Run{'s' if len(subagent_sessions) != 1 else ''}"
+            if subagent_sessions
+            else ""
+        )
         hub_lines.extend(
             [
                 "",
                 "---",
                 "",
-                f"## 2. Session & Fork Telemetry ({len(sessions)} Sessions across {root_count} Root Tree{'s' if root_count != 1 else ''})",
+                f"## 2. Session & Fork Telemetry ({len(primary_sessions)} Primary Session{'s' if len(primary_sessions) != 1 else ''} across {root_count} Root Tree{'s' if root_count != 1 else ''}{sub_header_suffix})",
                 "",
                 "| Tree & Fork Lineage | Full Session ID (Click to Open / Copy to Resume) | Context Usage (Active / Peak) | Chats & Steps | Started -> Last Active | Authored Docs |",
                 "| :--- | :--- | :--- | :--- | :--- | :--- |",
             ]
         )
 
-        for s in sessions:
+        def _render_session_row(s: dict[str, Any]) -> str:
             s_id = s["id"]
             t_num = s.get("tree_num", 1)
             f_depth = s.get("fork_depth", 0)
@@ -1273,7 +1290,16 @@ def sync_all_targets(
             ctx_cell = f"**`{cur_ctx}`** active / `{peak_ctx}` peak{compact_note} · `{out_tok}` out"
 
             step_span = s["last_step"] - s["first_step"] + 1
-            chats_cell = f"**`{s['user_chats']} chats`** · `{step_span} steps` (`#{s['first_step']}..#{s['last_step']}`)"
+            child_subs = subagents_by_parent.get(s_id, [])
+            sub_badge = (
+                f" · 🤖 `{len(child_subs)} subagent{'s' if len(child_subs) != 1 else ''}`"
+                if child_subs
+                else ""
+            )
+            chats_cell = (
+                f"**`{s['user_chats']} chats`** · `{step_span} steps` "
+                f"(`#{s['first_step']}..#{s['last_step']}`){sub_badge}"
+            )
             time_cell = f"`{s['started_local']}` -> `{s['last_active']}`"
 
             valid_authored = [a for a in (s.get("authored_docs") or []) if a in canonical_mds]
@@ -1291,8 +1317,29 @@ def sync_all_targets(
                 target_norm = str(target_art).replace("\\", "/").lstrip("/")
                 doc_links.append(f"[`{a}`](file:///{target_norm})")
             docs_cell = " · ".join(doc_links) if doc_links else "—"
-            hub_lines.append(
-                f"| {lineage} | {id_cell} | {ctx_cell} | {chats_cell} | {time_cell} | {docs_cell} |"
+            return f"| {lineage} | {id_cell} | {ctx_cell} | {chats_cell} | {time_cell} | {docs_cell} |"
+
+        for s in primary_sessions:
+            hub_lines.append(_render_session_row(s))
+
+        if subagent_sessions:
+            hub_lines.extend(
+                [
+                    "",
+                    "<details>",
+                    f"<summary>🤖 <strong>Subagent Tracking ({len(subagent_sessions)} background run{'s' if len(subagent_sessions) != 1 else ''})</strong> — Click to expand telemetry</summary>",
+                    "",
+                    "| Tree & Parent Lineage | Subagent Session ID (Click to Open) | Context Usage (Active / Peak) | Chats & Steps | Started -> Last Active | Authored Docs |",
+                    "| :--- | :--- | :--- | :--- | :--- | :--- |",
+                ]
+            )
+            for sub_s in subagent_sessions:
+                hub_lines.append(_render_session_row(sub_s))
+            hub_lines.extend(
+                [
+                    "",
+                    "</details>",
+                ]
             )
 
         hub_lines.extend(
@@ -1301,12 +1348,13 @@ def sync_all_targets(
                 "### Multi-Root Session Fork Forest (`mermaid`)",
                 "",
                 "```mermaid",
+                "%%{init: {'flowchart': {'padding': 24, 'nodeSpacing': 45, 'rankSpacing': 65, 'wrappingWidth': 320}}}%%",
                 "flowchart LR",
             ]
         )
-        # Group sessions by `tree_num` so multiple root sessions render as distinct subgraphs
+        # Group primary sessions by `tree_num` so multiple root sessions render as clean subgraphs
         trees: dict[int, list[dict[str, Any]]] = {}
-        for s in sessions_by_start:
+        for s in primary_by_start:
             t_num = s.get("tree_num", 1)
             trees.setdefault(t_num, []).append(s)
 
@@ -1314,38 +1362,39 @@ def sync_all_targets(
             tree_sessions = trees[t_num]
             root_sess = next((x for x in tree_sessions if not x["parent_id"]), tree_sessions[0])
             r_short = root_sess["id"][:8]
-            r_title = f" - {root_sess['title']}" if root_sess.get("title") else ""
-            hub_lines.append(f'    subgraph T{t_num}["Tree #{t_num} (Root: {r_short}{r_title})"]')
+            hub_lines.append(f'    subgraph T{t_num}["Tree #{t_num} · {r_short}"]')
             for s in tree_sessions:
                 num = session_num_map[s["id"]]
                 s_short = s["id"][:8]
-                cur_tag = " [CURRENT]" if s["id"] == sid else ""
                 ctx_lbl = format_tokens(s["current_ctx_tokens"])
                 peak_lbl = format_tokens(s["peak_ctx_tokens"])
-                f_depth = s.get("fork_depth", 0)
-                if s.get("is_subagent"):
-                    agent_lbl = s.get("agent_name") or "subagent"
-                    role_lbl = f"Subagent {agent_lbl}"
+                if s["id"] == sid:
+                    role_tag = "[CURRENT]"
                 elif s["parent_id"]:
-                    role_lbl = f"Fork d={f_depth} @{s['fork_step']}"
+                    role_tag = f"(Fork @{s['fork_step']})"
                 else:
-                    role_lbl = "Root"
+                    role_tag = "(Root)"
                 u_chats = s["user_chats"]
                 f_step = s["first_step"]
                 l_step = s["last_step"]
-                hub_lines.append(
-                    f'        N{num}["S{num}: {s_short}{cur_tag} ({role_lbl}) | {u_chats} chats, steps {f_step}..{l_step} | Ctx: {ctx_lbl} (peak {peak_lbl})"]'
-                )
+                child_sub_count = len(subagents_by_parent.get(s["id"], []))
+                lines_in_box = [
+                    f"S{num}: {s_short} {role_tag}",
+                    f"{u_chats} chats · steps {f_step}..{l_step}",
+                    f"Ctx: {ctx_lbl} / {peak_lbl}",
+                ]
+                if child_sub_count > 0:
+                    lines_in_box.append(
+                        f"+{child_sub_count} subagent{'s' if child_sub_count != 1 else ''}"
+                    )
+                label_str = "<br/>".join(lines_in_box)
+                hub_lines.append(f'        N{num}["{label_str}"]')
             for s in tree_sessions:
                 num = session_num_map[s["id"]]
                 if s["parent_id"] and s["parent_id"] in session_num_map:
                     pnum = session_num_map[s["parent_id"]]
                     fk_step = s["fork_step"]
-                    if s.get("is_subagent"):
-                        agent_lbl = s.get("agent_name") or "subagent"
-                        edge_lbl = f"subagent ({agent_lbl})" + (f" @ step {fk_step}" if fk_step is not None else "")
-                    else:
-                        edge_lbl = f"forked @ step {fk_step}"
+                    edge_lbl = f"fork @ {fk_step}"
                     hub_lines.append(f'        N{pnum} -- "{edge_lbl}" --> N{num}')
             hub_lines.append("    end")
 
@@ -1359,7 +1408,8 @@ def sync_all_targets(
                 "",
             ]
         )
-        for s in sessions:
+
+        def _append_session_prompts(s: dict[str, Any]) -> None:
             s_id = s["id"]
             is_cur_badge = " *(Current Session)*" if s_id == sid else ""
             if s.get("is_subagent"):
@@ -1371,9 +1421,7 @@ def sync_all_targets(
                 role_badge = f"Fork of `{s['parent_id']}` @ step `{s['fork_step']}`"
             else:
                 role_badge = "Root Session (`step 0`)"
-            hub_lines.append(
-                f"### [`{s_id}`](conversation://{s_id}){is_cur_badge}"
-            )
+            hub_lines.append(f"### [`{s_id}`](conversation://{s_id}){is_cur_badge}")
             hub_lines.append(
                 f"- **Lineage:** {role_badge} · **Context:** `{format_tokens(s['current_ctx_tokens'])}` active (`{format_tokens(s['peak_ctx_tokens'])}` peak) · **Chats:** `{s['user_chats']}` (`steps #{s['first_step']}..#{s['last_step']}`) · **Active:** `{s['started_local']}` -> `{s['last_active']}`"
             )
@@ -1382,6 +1430,27 @@ def sync_all_targets(
                     one_line = " ".join(pr["text"].splitlines())
                     hub_lines.append(f"  - **`[{pr['timestamp']} · step #{pr['step']}]`** {one_line}")
             hub_lines.append("")
+
+        for s in primary_sessions:
+            _append_session_prompts(s)
+
+        subagents_with_prompts = [sub_s for sub_s in subagent_sessions if sub_s.get("prompts")]
+        if subagents_with_prompts:
+            hub_lines.extend(
+                [
+                    "<details>",
+                    f"<summary>🤖 <strong>Subagent Task Prompts ({len(subagents_with_prompts)} background run{'s' if len(subagents_with_prompts) != 1 else ''})</strong> — Click to expand</summary>",
+                    "",
+                ]
+            )
+            for sub_s in subagents_with_prompts:
+                _append_session_prompts(sub_s)
+            hub_lines.extend(
+                [
+                    "</details>",
+                    "",
+                ]
+            )
 
         hub_lines.extend(
             [

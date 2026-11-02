@@ -652,3 +652,35 @@ body.agy-review-body img,
   overflow-x: auto;
   text-align: center;
 }
+
+.mermaid p,
+.mermaid .nodeLabel p,
+.mermaid .edgeLabel p,
+.mermaid .cluster-label p,
+svg foreignObject p {
+  margin: 0 !important;
+  padding: 0 !important;
+  line-height: 1.35 !important;
+}
+
+/* --------------------------------------------------------------------------
+   Collapsible Details / Subagent Dropdowns
+   -------------------------------------------------------------------------- */
+body.vscode-body details,
+body.agy-review-body details,
+.markdown-preview.markdown-preview details {
+  margin: 0.75rem 0 !important;
+  padding: 0.5rem 0.85rem !important;
+  border-radius: 0.5rem !important;
+  border: 1px solid var(--agy-table-border) !important;
+  background: rgba(128, 128, 128, 0.04) !important;
+}
+
+body.vscode-body details > summary,
+body.agy-review-body details > summary,
+.markdown-preview.markdown-preview details > summary {
+  cursor: pointer;
+  user-select: none;
+  padding: 0.15rem 0;
+  color: var(--agy-heading);
+}
