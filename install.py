@@ -251,6 +251,14 @@ def main() -> None:
             shutil.copy2(src, dst)
         print(f"Installed: {dst}")
 
+    pkg_src = repo_root / "scripts" / "local_recap"
+    pkg_dst = target_dir / "scripts" / "local_recap"
+    if pkg_src.exists() and pkg_src.resolve() != pkg_dst.resolve():
+        if pkg_dst.exists():
+            shutil.rmtree(pkg_dst)
+        shutil.copytree(pkg_src, pkg_dst, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        print(f"Installed package: {pkg_dst}")
+
     installed_skill_md = target_dir / "SKILL.md"
     installed_script = target_dir / "scripts" / "sync_local_notes.py"
     py_cmd = "python" if os.name == "nt" else "python3"
