@@ -1229,7 +1229,7 @@ def sync_all_targets(
             h2_badges = " · ".join(f"`{h}`" for h in st["h2s"]) if st["h2s"] else "—"
             vis_str = f" · `{st['visual_count']} visuals`" if st["visual_count"] > 0 else ""
             orig_full = doc["origin_sid"]
-            orig_link = f"`{orig_full}` · [↗ Open](conversation://{orig_full})"
+            orig_link = f"`{orig_full}`"
             scope_col = f"{orig_link} (`{st['line_count']} lines`{vis_str})"
             bridged_candidate = link_brain_dir / orig_full / md_name
             orig_brain_path = (
@@ -1256,7 +1256,7 @@ def sync_all_targets(
                 "",
                 f"## 2. Session & Fork Telemetry ({len(primary_sessions)} Primary Session{'s' if len(primary_sessions) != 1 else ''} across {root_count} Root Tree{'s' if root_count != 1 else ''}{sub_header_suffix})",
                 "",
-                "| Tree & Fork Lineage | Full Session ID (Click to Open / Copy to Resume) | Context Usage (Active / Peak) | Chats & Steps | Started -> Last Active | Authored Docs |",
+                "| Tree & Fork Lineage | Full Session ID (Copy to Resume) | Context Usage (Active / Peak) | Chats & Steps | Started -> Last Active | Authored Docs |",
                 "| :--- | :--- | :--- | :--- | :--- | :--- |",
             ]
         )
@@ -1282,7 +1282,7 @@ def sync_all_targets(
             else:
                 lineage = f"`Tree #{t_num}` · 🌱 **Root Session** (`step 0`){title_tag}{is_cur}"
 
-            id_cell = f"`{s_id}` · [↗ Open](conversation://{s_id})"
+            id_cell = f"`{s_id}`"
             cur_ctx = format_tokens(s["current_ctx_tokens"])
             peak_ctx = format_tokens(s["peak_ctx_tokens"])
             out_tok = format_tokens(s["total_output_tokens"])
@@ -1329,7 +1329,7 @@ def sync_all_targets(
                     "<details>",
                     f"<summary>🤖 <strong>Subagent Tracking ({len(subagent_sessions)} background run{'s' if len(subagent_sessions) != 1 else ''})</strong> — Click to expand telemetry</summary>",
                     "",
-                    "| Tree & Parent Lineage | Subagent Session ID (Click to Open) | Context Usage (Active / Peak) | Chats & Steps | Started -> Last Active | Authored Docs |",
+                    "| Tree & Parent Lineage | Subagent Session ID | Context Usage (Active / Peak) | Chats & Steps | Started -> Last Active | Authored Docs |",
                     "| :--- | :--- | :--- | :--- | :--- | :--- |",
                 ]
             )
@@ -1421,7 +1421,7 @@ def sync_all_targets(
                 role_badge = f"Fork of `{s['parent_id']}` @ step `{s['fork_step']}`"
             else:
                 role_badge = "Root Session (`step 0`)"
-            hub_lines.append(f"### `{s_id}` · [↗ Open](conversation://{s_id}){is_cur_badge}")
+            hub_lines.append(f"### `{s_id}`{is_cur_badge}")
             hub_lines.append(
                 f"- **Lineage:** {role_badge} · **Context:** `{format_tokens(s['current_ctx_tokens'])}` active (`{format_tokens(s['peak_ctx_tokens'])}` peak) · **Chats:** `{s['user_chats']}` (`steps #{s['first_step']}..#{s['last_step']}`) · **Active:** `{s['started_local']}` -> `{s['last_active']}`"
             )
