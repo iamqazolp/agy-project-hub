@@ -205,7 +205,7 @@ def configure_vscode_editor_associations() -> list[Path]:
 
 
 def register_lifecycle_hooks(config_root: Path, py_cmd: str, installed_script: Path) -> Path:
-    """Register `local-recap-auto-sync` in `~/.gemini/config/hooks.json` so `PROJECT_HUB.md`
+    """Register `agy-project-hub-auto-sync` in `~/.gemini/config/hooks.json` so `PROJECT_HUB.md`
     and `.local-notes/` shortcuts are automatically updated whenever brain artifacts are modified.
     """
     hooks_file = config_root / "hooks.json"
@@ -218,7 +218,10 @@ def register_lifecycle_hooks(config_root: Path, py_cmd: str, installed_script: P
         except Exception:
             pass
 
-    hooks_data["local-recap-auto-sync"] = {
+    # Remove legacy hook entry if present
+    hooks_data.pop("local-recap-auto-sync", None)
+
+    hooks_data["agy-project-hub-auto-sync"] = {
         "enabled": True,
         "PostInvocation": [
             {
@@ -252,19 +255,28 @@ def register_lifecycle_hooks(config_root: Path, py_cmd: str, installed_script: P
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Install or update the local-recap skill (agy-project-hub)")
+    parser = argparse.ArgumentParser(description="Install or update the agy-project-hub skill")
     parser.add_argument(
         "--copy",
         action="store_true",
-        help="Copy files instead of creating symlinks into ~/.gemini/config/skills/local-recap",
+        help="Copy files instead of creating symlinks into ~/.gemini/config/skills/agy-project-hub",
     )
     args = parser.parse_args()
     use_symlink = not args.copy
 
     repo_root = Path(__file__).resolve().parent
     config_root = Path.home() / ".gemini" / "config"
-    target_dir = config_root / "skills" / "local-recap"
+    skills_root = config_root / "skills"
+    target_dir = skills_root / "agy-project-hub"
     target_dir.mkdir(parents=True, exist_ok=True)
+
+    # Remove legacy skill directory `local-recap` so Antigravity only discovers `agy-project-hub`
+    legacy_skill_dir = skills_root / "local-recap"
+    if legacy_skill_dir.is_symlink():
+        legacy_skill_dir.unlink(missing_ok=True)
+    elif legacy_skill_dir.exists():
+        shutil.rmtree(legacy_skill_dir, ignore_errors=True)
+        print(f"Removed legacy skill directory: {legacy_skill_dir}")
 
     # Link or copy the modular package, CLI entrypoint, and HTML template
     linked_items = [
@@ -284,7 +296,7 @@ def main() -> None:
     py_cmd = "python" if os.name == "nt" else "python3"
     skill_text = (repo_root / "SKILL.md").read_text(encoding="utf-8", errors="ignore")
     skill_text = skill_text.replace(
-        'python3 "$HOME/.gemini/config/skills/local-recap/scripts/sync_local_notes.py"',
+        'python3 "$HOME/.gemini/config/skills/agy-project-hub/scripts/sync_local_notes.py"',
         f'{py_cmd} "{installed_script}"',
     )
     installed_skill_md.write_text(skill_text, encoding="utf-8", newline="\n")
@@ -299,7 +311,7 @@ def main() -> None:
     for vs_cfg in configure_vscode_editor_associations():
         print(f"Configured Antigravity Markdown associations: {vs_cfg}")
 
-    print("\nSkill 'local-recap' (modular package) is ready with zero repo-to-skill drift!")
+    print("\nSkill 'agy-project-hub' (modular package) is ready with zero repo-to-skill drift!")
 
 
 if __name__ == "__main__":

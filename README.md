@@ -1,4 +1,4 @@
-# agy-project-hub (`local-recap`)
+# agy-project-hub
 
 If you run multiple sessions or forks on the same project in Google Antigravity, your notes, plans, and deep dives end up scattered across random `~/.gemini/antigravity-cli/brain/<session-id>/` folders. Worse, if you copy those `.md` files into your workspace to keep track of them, VS Code opens them as plain text instead of using Antigravity's styled Artifact Viewer.
 
@@ -40,7 +40,7 @@ You can also ask the agent directly in chat:
 Or run the sync script manually from a terminal:
 
 ```bash
-python3 ~/.gemini/config/skills/local-recap/scripts/sync_local_notes.py --workspace /path/to/repo
+python3 ~/.gemini/config/skills/agy-project-hub/scripts/sync_local_notes.py --workspace /path/to/repo
 ```
 
 ## How fork lineage is reconstructed
@@ -56,7 +56,7 @@ When you have multiple root sessions and forks on the same repo, `sync_local_not
 ```text
 agy-project-hub/
 ├── SKILL.md                      # Skill instructions loaded by Antigravity (~17 lines)
-├── install.py                    # Symlinks the skill package into ~/.gemini/config/skills/local-recap
+├── install.py                    # Symlinks the skill package into ~/.gemini/config/skills/agy-project-hub
 ├── README.md                     # This file
 ├── scripts/
 │   ├── sync_local_notes.py       # Thin CLI entrypoint & backwards-compatible façade

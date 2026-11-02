@@ -27,7 +27,7 @@ def ensure_git_exclude(workspace: Path, pattern: str = ".local-notes/") -> bool:
         with exclude_file.open("a", encoding="utf-8") as f:
             if existing and not existing.endswith("\n"):
                 f.write("\n")
-            f.write(f"# Local session recaps & visualizations (local-recap skill)\n{pattern}\n")
+            f.write(f"# Local session recaps & visualizations (agy-project-hub skill)\n{pattern}\n")
         return True
     return False
 

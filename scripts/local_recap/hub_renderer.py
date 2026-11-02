@@ -486,7 +486,7 @@ def render_project_hub(
     hub_lines.extend(
         [
             "",
-            f"*Last synced by `local-recap` skill at `{now_str}`.*",
+            f"*Last synced by `agy-project-hub` skill at `{now_str}`.*",
             "",
         ]
     )
