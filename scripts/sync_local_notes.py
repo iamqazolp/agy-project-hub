@@ -1096,10 +1096,19 @@ def ensure_vscode_editor_associations(workspace: Path | None = None) -> None:
         assoc = data.get("workbench.editorAssociations")
         if not isinstance(assoc, dict):
             assoc = {}
+        has_agy_md_ext = (home / ".vscode" / "extensions" / "iamqazolp.agy-markdown-review-1.0.0").exists()
+        local_notes_editor = "antigravity.markdownReview" if has_agy_md_ext else "antigravity.artifactEditor"
+        desired_assoc = {
+            "**/.local-notes/*.md": local_notes_editor,
+            "**/.local-notes/**/*.md": local_notes_editor,
+            "**/.gemini/*/brain/**/*.md": "antigravity.artifactEditor",
+        }
+        if has_agy_md_ext:
+            desired_assoc["*.md"] = "antigravity.markdownReview"
         changed = False
-        for pattern in ("**/.local-notes/*.md", "**/.local-notes/**/*.md", "**/.gemini/*/brain/**/*.md"):
-            if assoc.get(pattern) != "antigravity.artifactEditor":
-                assoc[pattern] = "antigravity.artifactEditor"
+        for pattern, editor_id in desired_assoc.items():
+            if assoc.get(pattern) != editor_id:
+                assoc[pattern] = editor_id
                 changed = True
         if changed:
             data["workbench.editorAssociations"] = assoc
@@ -1217,7 +1226,7 @@ def sync_all_targets(
             h2_badges = " · ".join(f"`{h}`" for h in st["h2s"]) if st["h2s"] else "—"
             vis_str = f" · `{st['visual_count']} visuals`" if st["visual_count"] > 0 else ""
             orig_full = doc["origin_sid"]
-            orig_link = f"[`{orig_full}`](conversation://{orig_full})"
+            orig_link = f"`{orig_full}` [↗](conversation://{orig_full})"
             scope_col = f"{orig_link} (`{st['line_count']} lines`{vis_str})"
             bridged_candidate = link_brain_dir / orig_full / md_name
             orig_brain_path = (
@@ -1265,7 +1274,7 @@ def sync_all_targets(
             else:
                 lineage = f"`Tree #{t_num}` · 🌱 **Root Session** (`step 0`){title_tag}{is_cur}"
 
-            id_cell = f"[`{s_id}`](conversation://{s_id})"
+            id_cell = f"`{s_id}` · [↗ Open](conversation://{s_id})"
             cur_ctx = format_tokens(s["current_ctx_tokens"])
             peak_ctx = format_tokens(s["peak_ctx_tokens"])
             out_tok = format_tokens(s["total_output_tokens"])
@@ -1372,7 +1381,7 @@ def sync_all_targets(
             else:
                 role_badge = "Root Session (`step 0`)"
             hub_lines.append(
-                f"### [`{s_id}`](conversation://{s_id}){is_cur_badge}"
+                f"### `{s_id}` · [↗ Open](conversation://{s_id}){is_cur_badge}"
             )
             hub_lines.append(
                 f"- **Lineage:** {role_badge} · **Context:** `{format_tokens(s['current_ctx_tokens'])}` active (`{format_tokens(s['peak_ctx_tokens'])}` peak) · **Chats:** `{s['user_chats']}` (`steps #{s['first_step']}..#{s['last_step']}`) · **Active:** `{s['started_local']}` -> `{s['last_active']}`"

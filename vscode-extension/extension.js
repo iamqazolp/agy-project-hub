@@ -227,6 +227,11 @@ class AntigravityMarkdownReviewProvider {
             await vscode.env.clipboard.writeText(raw);
             vscode.window.setStatusBarMessage("Antigravity: Copied raw Markdown to clipboard", 2500);
           } catch (_) {}
+        } else if (msg.type === "copyText" && typeof msg.text === "string") {
+          try {
+            await vscode.env.clipboard.writeText(msg.text);
+            vscode.window.setStatusBarMessage(`Antigravity: Copied "${msg.text}" to clipboard`, 2500);
+          } catch (_) {}
         } else if (msg.type === "openLink") {
           await handleWebviewLinkClick(msg.href, info);
         }
@@ -406,6 +411,9 @@ function buildWebviewHtml({ cssUri, jsUri, renderedHtml, displayPath, isBrainArt
   <script>
     (function() {
       const vscode = acquireVsCodeApi();
+      window.__agyCopyText = function(text) {
+        vscode.postMessage({ type: "copyText", text: String(text || "") });
+      };
       const btnEdit = document.getElementById("btn-edit");
       const btnSplit = document.getElementById("btn-split");
       const btnCopy = document.getElementById("btn-copy");
@@ -417,6 +425,10 @@ function buildWebviewHtml({ cssUri, jsUri, renderedHtml, displayPath, isBrainArt
       if (btnNative) btnNative.addEventListener("click", () => vscode.postMessage({ type: "openNativeArtifact" }));
 
       document.addEventListener("click", (e) => {
+        const sel = window.getSelection ? String(window.getSelection().toString() || "").trim() : "";
+        if (sel.length > 0) {
+          return;
+        }
         const a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
         if (!a) return;
         const href = a.getAttribute("href") || "";

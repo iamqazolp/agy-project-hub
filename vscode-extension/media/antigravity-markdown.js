@@ -208,14 +208,72 @@
     });
   }
 
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  function copyTextToClipboard(text, onDone) {
+    if (window.__agyCopyText) {
+      window.__agyCopyText(text);
+      if (onDone) onDone();
+      return;
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(
+        () => {
+          if (onDone) onDone();
+        },
+        () => fallbackCopy(text, onDone)
+      );
+    } else {
+      fallbackCopy(text, onDone);
+    }
+  }
+
+  function fallbackCopy(text, onDone) {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand("copy");
+    } catch (_) {}
+    ta.remove();
+    if (onDone) onDone();
+  }
+
   function decorateLinks(root) {
     root.querySelectorAll("a[href]").forEach((a) => {
+      a.setAttribute("draggable", "false");
       const href = a.getAttribute("href") || "";
       if (href.startsWith("file://")) {
         a.classList.add("agy-file-link");
       } else if (href.startsWith("conversation://")) {
         a.classList.add("agy-conv-link");
       }
+    });
+
+    // Add 1-click Copy buttons next to session UUID inline code tokens
+    root.querySelectorAll(":not(pre) > code[data-agy-uuid!='1']").forEach((codeEl) => {
+      const txt = (codeEl.textContent || "").trim();
+      if (!UUID_RE.test(txt)) return;
+      codeEl.setAttribute("data-agy-uuid", "1");
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "agy-uuid-copy-btn";
+      btn.title = "Copy session ID: " + txt;
+      btn.textContent = "Copy";
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        copyTextToClipboard(txt, () => {
+          btn.textContent = "Copied!";
+          setTimeout(() => {
+            btn.textContent = "Copy";
+          }, 1400);
+        });
+      });
+      codeEl.insertAdjacentElement("afterend", btn);
     });
   }
 
