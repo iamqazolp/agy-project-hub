@@ -120,64 +120,77 @@ def query_antigravity_sqlite_metadata(
     meta: dict[str, SqliteSessionMeta] = {}
     ws_variants = _normalize_workspace_variants(workspace)
 
-    history_workspaces: dict[str, set[str]] = {}
-    history_file = ag_dir / "history.jsonl"
-    if history_file.exists():
-        try:
-            for line in history_file.read_text(encoding="utf-8", errors="ignore").splitlines():
-                if not line.strip():
-                    continue
-                try:
-                    hobj = json.loads(line)
-                except Exception:
-                    continue
-                if hobj.get("type") == "slash_command":
-                    continue
-                h_cid = str(hobj.get("conversationId") or "").strip()
-                h_ws = str(hobj.get("workspace") or "").strip()
-                if h_cid and h_ws:
-                    history_workspaces.setdefault(h_cid, set()).update(
-                        _normalize_workspace_variants(h_ws)
-                    )
-        except Exception:
-            pass
+    ag_dirs = [ag_dir]
+    if ag_dir.name in {"antigravity", "antigravity-cli"}:
+        sibling = ag_dir.parent / (
+            "antigravity" if ag_dir.name == "antigravity-cli" else "antigravity-cli"
+        )
+        if sibling.exists() and sibling not in ag_dirs:
+            ag_dirs.append(sibling)
 
-    summaries_db = ag_dir / "conversation_summaries.db"
-    if summaries_db.exists():
-        try:
-            conn = sqlite3.connect(f"file:{summaries_db}?mode=ro", uri=True)
-            rows = conn.execute(
-                "SELECT conversation_id, title, step_count, workspace_uris, parent_conversation_id, "
-                "agent_name, nesting_depth FROM conversation_summaries"
-            ).fetchall()
-            for cid, title, step_count, ws_uris, parent_cid, agent_name, nesting_depth in rows:
-                db_paths = _parse_workspace_uris(ws_uris or "")
-                cid_paths = db_paths if db_paths else history_workspaces.get(cid, set())
-                matched_ws = bool(cid_paths & ws_variants)
-                known_other = bool(cid_paths) and not matched_ws
-                clean_title = (title or "").strip()
-                if not clean_title:
-                    ann_file = ag_dir / "annotations" / f"{cid}.pbtxt"
-                    if ann_file.exists():
-                        m_title = re.search(
-                            r'title:\s*"([^"]+)"',
-                            ann_file.read_text(encoding="utf-8", errors="ignore"),
+    history_workspaces: dict[str, set[str]] = {}
+    for cur_ag_dir in ag_dirs:
+        history_file = cur_ag_dir / "history.jsonl"
+        if history_file.exists():
+            try:
+                for line in history_file.read_text(encoding="utf-8", errors="ignore").splitlines():
+                    if not line.strip():
+                        continue
+                    try:
+                        hobj = json.loads(line)
+                    except Exception:
+                        continue
+                    if hobj.get("type") == "slash_command":
+                        continue
+                    h_cid = str(hobj.get("conversationId") or "").strip()
+                    h_ws = str(hobj.get("workspace") or "").strip()
+                    if h_cid and h_ws:
+                        history_workspaces.setdefault(h_cid, set()).update(
+                            _normalize_workspace_variants(h_ws)
                         )
-                        if m_title:
-                            clean_title = m_title.group(1).strip()
-                meta[cid] = SqliteSessionMeta(
-                    matched_workspace=matched_ws,
-                    known_other_workspace=known_other,
-                    title=clean_title,
-                    db_step_count=int(step_count or 0),
-                    subagent_parent_id=(parent_cid or "").strip(),
-                    agent_name=(agent_name or "").strip(),
-                    nesting_depth=int(nesting_depth or 0),
-                    ancestry=[],
-                )
-            conn.close()
-        except Exception:
-            pass
+            except Exception:
+                pass
+
+    for cur_ag_dir in ag_dirs:
+        summaries_db = cur_ag_dir / "conversation_summaries.db"
+        if summaries_db.exists():
+            try:
+                conn = sqlite3.connect(f"file:{summaries_db}?mode=ro", uri=True)
+                rows = conn.execute(
+                    "SELECT conversation_id, title, step_count, workspace_uris, parent_conversation_id, "
+                    "agent_name, nesting_depth FROM conversation_summaries"
+                ).fetchall()
+                for cid, title, step_count, ws_uris, parent_cid, agent_name, nesting_depth in rows:
+                    db_paths = _parse_workspace_uris(ws_uris or "")
+                    cid_paths = db_paths if db_paths else history_workspaces.get(cid, set())
+                    matched_ws = bool(cid_paths & ws_variants)
+                    known_other = bool(cid_paths) and not matched_ws
+                    clean_title = (title or "").strip()
+                    if not clean_title:
+                        ann_file = cur_ag_dir / "annotations" / f"{cid}.pbtxt"
+                        if ann_file.exists():
+                            m_title = re.search(
+                                r'title:\s*"([^"]+)"',
+                                ann_file.read_text(encoding="utf-8", errors="ignore"),
+                            )
+                            if m_title:
+                                clean_title = m_title.group(1).strip()
+                    existing = meta.get(cid)
+                    if existing is not None and existing.matched_workspace and not matched_ws:
+                        continue
+                    meta[cid] = SqliteSessionMeta(
+                        matched_workspace=matched_ws or (existing.matched_workspace if existing else False),
+                        known_other_workspace=known_other and not (existing.matched_workspace if existing else False),
+                        title=clean_title or (existing.title if existing else ""),
+                        db_step_count=max(int(step_count or 0), existing.db_step_count if existing else 0),
+                        subagent_parent_id=(parent_cid or "").strip() or (existing.subagent_parent_id if existing else ""),
+                        agent_name=(agent_name or "").strip() or (existing.agent_name if existing else ""),
+                        nesting_depth=max(int(nesting_depth or 0), existing.nesting_depth if existing else 0),
+                        ancestry=list(existing.ancestry) if existing else [],
+                    )
+                conn.close()
+            except Exception:
+                pass
 
     for h_cid, h_paths in history_workspaces.items():
         if h_cid not in meta:
@@ -199,26 +212,27 @@ def query_antigravity_sqlite_metadata(
                     info.matched_workspace = False
                     info.known_other_workspace = True
 
-    conv_dir = ag_dir / "conversations"
-    if conv_dir.exists():
-        for db_file in conv_dir.glob("*.db"):
-            cid = db_file.stem
-            if cid not in meta or not meta[cid].matched_workspace:
-                continue
-            try:
-                conn = sqlite3.connect(f"file:{db_file}?mode=ro", uri=True)
-                prefs = conn.execute(
-                    "SELECT idx, data FROM parent_references ORDER BY idx ASC"
-                ).fetchall()
-                ancestry: list[AncestryLink] = []
-                for idx, blob in prefs:
-                    if isinstance(blob, bytes):
-                        psid, fstep = parse_parent_reference_blob(blob)
-                        if psid:
-                            ancestry.append(AncestryLink(idx=idx, parent_id=psid, fork_step=fstep))
-                meta[cid].ancestry = ancestry
-                conn.close()
-            except Exception:
-                pass
+    for cur_ag_dir in ag_dirs:
+        conv_dir = cur_ag_dir / "conversations"
+        if conv_dir.exists():
+            for db_file in conv_dir.glob("*.db"):
+                cid = db_file.stem
+                if cid not in meta or not meta[cid].matched_workspace or meta[cid].ancestry:
+                    continue
+                try:
+                    conn = sqlite3.connect(f"file:{db_file}?mode=ro", uri=True)
+                    prefs = conn.execute(
+                        "SELECT idx, data FROM parent_references ORDER BY idx ASC"
+                    ).fetchall()
+                    ancestry: list[AncestryLink] = []
+                    for idx, blob in prefs:
+                        if isinstance(blob, bytes):
+                            psid, fstep = parse_parent_reference_blob(blob)
+                            if psid:
+                                ancestry.append(AncestryLink(idx=idx, parent_id=psid, fork_step=fstep))
+                    meta[cid].ancestry = ancestry
+                    conn.close()
+                except Exception:
+                    pass
 
     return meta

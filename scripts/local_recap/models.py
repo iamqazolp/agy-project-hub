@@ -78,12 +78,16 @@ class SessionInfo(DictCompatMixin):
     last_step: int = 0
     step_timestamps: dict[int, str] = field(default_factory=dict)
     step_end_tokens: dict[int, int] = field(default_factory=dict)
+    step_ctx_tokens: dict[int, int] = field(default_factory=dict)
+    chat_steps: list[int] = field(default_factory=list)
     first_planner_ctx_tokens: int = 0
     user_chats: int = 0
+    inherited_chats: int = 0
     current_ctx_tokens: int = 0
     peak_ctx_tokens: int = 0
     total_output_tokens: int = 0
     compaction_count: int = 0
+    inherited_compactions: int = 0
     prompts: list[PromptEntry] = field(default_factory=list)
     artifacts: list[Path] = field(default_factory=list)
     authored_docs: list[str] = field(default_factory=list)

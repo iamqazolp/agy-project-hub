@@ -356,9 +356,15 @@ def _write_text_preserving_mtime(dst: Path, content: str, mtime: float | None = 
             pass
     if changed:
         dst.write_text(content, encoding="utf-8", newline="\n")
-    if mtime is not None:
+        if mtime is not None:
+            try:
+                os.utime(dst, (mtime, mtime))
+            except Exception:
+                pass
+    elif mtime is not None and dst.exists():
         try:
-            os.utime(dst, (mtime, mtime))
+            if abs(dst.stat().st_mtime - mtime) > 1.0:
+                os.utime(dst, (mtime, mtime))
         except Exception:
             pass
 

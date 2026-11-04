@@ -44,7 +44,7 @@ def run_git(workspace: Path, args: list[str]) -> str:
             errors="replace",
             timeout=5,
         )
-        return res.stdout.strip() if res.returncode == 0 else ""
+        return res.stdout.strip("\r\n") if res.returncode == 0 else ""
     except Exception:
         return ""
 

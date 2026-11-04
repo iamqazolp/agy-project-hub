@@ -43,6 +43,7 @@ def scan_brain_sessions(
     sessions: list[SessionInfo] = []
     origin_map: dict[str, tuple[str, str]] = {}  # md_name -> (earliest_ts, session_id)
     latest_write_ts: dict[str, str] = {}  # md_name -> latest write_file ISO timestamp
+    transcript_subagent_parents: dict[str, str] = {}  # subagent_cid -> parent_cid
 
     for conv_dir in brain_dir.iterdir():
         if not conv_dir.is_dir():
@@ -70,6 +71,8 @@ def scan_brain_sessions(
         last_step: int | None = None
         step_timestamps: dict[int, str] = {}
         step_end_tokens: dict[int, int] = {}
+        step_ctx_tokens: dict[int, int] = {}
+        chat_steps: list[int] = []
         first_planner_ctx_tokens = 0
         user_chat_count = 0
         current_ctx_tokens = 0
@@ -95,6 +98,12 @@ def scan_brain_sessions(
                         ):
                             matched = True
                 if matched:
+                    if "Created the following subagent:" in raw_text:
+                        for m_sub in re.finditer(
+                            r'Created the following subagent:[\s\\n]*\{[\s\\n]*\\?"conversationId\\?"\s*:\s*\\?"([0-9a-f-]{36})\\?"',
+                            raw_text,
+                        ):
+                            transcript_subagent_parents[m_sub.group(1)] = cid
                     for line in raw_text.splitlines():
                         if not line.strip():
                             continue
@@ -124,6 +133,8 @@ def scan_brain_sessions(
                             if first_planner_ctx_tokens == 0:
                                 first_planner_ctx_tokens = ctx_tok
                             last_known_end_tokens = ctx_tok + out_tok
+                            if isinstance(s_idx, int):
+                                step_ctx_tokens[s_idx] = ctx_tok
                             if prev_ctx > 60000 and ctx_tok < prev_ctx * 0.5:
                                 compaction_count += 1
                             prev_ctx = ctx_tok
@@ -135,6 +146,8 @@ def scan_brain_sessions(
 
                         if obj.get("type") == "USER_INPUT" and obj.get("content"):
                             user_chat_count += 1
+                            if isinstance(s_idx, int):
+                                chat_steps.append(s_idx)
                             req = extract_user_request_text(str(obj["content"]))
                             if req and not req.startswith("<CONTEXT_SUMMARY>"):
                                 user_prompts.append(
@@ -225,6 +238,8 @@ def scan_brain_sessions(
                     last_step=last_step if last_step is not None else 0,
                     step_timestamps=step_timestamps,
                     step_end_tokens=step_end_tokens,
+                    step_ctx_tokens=step_ctx_tokens,
+                    chat_steps=chat_steps,
                     first_planner_ctx_tokens=first_planner_ctx_tokens,
                     user_chats=user_chat_count,
                     current_ctx_tokens=current_ctx_tokens,
@@ -253,10 +268,13 @@ def scan_brain_sessions(
     sess_by_id = {s.id: s for s in sessions}
     all_ids = list(sess_by_id.keys())
     for s in sessions:
-        spid = s.subagent_parent_id or ""
+        spid = s.subagent_parent_id or transcript_subagent_parents.get(s.id, "")
         if spid:
+            s.subagent_parent_id = spid
             s.parent_id = spid
             s.is_subagent = True
+            if not s.agent_name:
+                s.agent_name = "self"
             s.fork_depth = max(1, int(s.nesting_depth or 1))
             s.lineage_source = "sqlite_subagent_parent"
             parent_obj = sess_by_id.get(spid)
@@ -361,6 +379,57 @@ def scan_brain_sessions(
         if s.root_id not in root_tree_map:
             root_tree_map[s.root_id] = len(root_tree_map) + 1
         s.tree_num = root_tree_map[s.root_id]
+
+    # Propagate inherited trajectory state (title, peak_ctx_tokens, compaction_count,
+    # current_ctx_tokens fallback, and inherited_chats) down fork chains in topological order.
+    for s in sorted(
+        [x for x in sessions if not x.is_subagent and x.parent_id],
+        key=lambda x: (x.fork_depth, x.first_step),
+    ):
+        parent_obj = sess_by_id.get(s.parent_id or "")
+        if not parent_obj:
+            continue
+        fstep = s.fork_step if s.fork_step is not None else max(0, s.first_step - 1)
+
+        if not s.title and parent_obj.title:
+            s.title = parent_obj.title
+
+        inherited_ctx_map = {
+            st: tok for st, tok in parent_obj.step_ctx_tokens.items() if st <= fstep
+        }
+        combined_ctx_map = {**inherited_ctx_map, **s.step_ctx_tokens}
+        s.step_ctx_tokens = combined_ctx_map
+
+        prev_c = 0
+        stitched_compacts = 0
+        pre_fork_compacts = 0
+        stitched_peak = parent_obj.peak_ctx_tokens if not inherited_ctx_map else 0
+        last_c = 0
+        for st_idx in sorted(combined_ctx_map.keys()):
+            c_tok = combined_ctx_map[st_idx]
+            if c_tok <= 0:
+                continue
+            if prev_c > 60000 and c_tok < prev_c * 0.5:
+                stitched_compacts += 1
+                if st_idx <= fstep:
+                    pre_fork_compacts += 1
+            prev_c = c_tok
+            last_c = c_tok
+            if c_tok > stitched_peak:
+                stitched_peak = c_tok
+
+        s.peak_ctx_tokens = max(s.peak_ctx_tokens, stitched_peak)
+        s.compaction_count = max(s.compaction_count, stitched_compacts)
+        s.inherited_compactions = pre_fork_compacts
+        if s.current_ctx_tokens == 0 and last_c > 0:
+            s.current_ctx_tokens = last_c
+
+        inherited_chat_list = [st for st in parent_obj.chat_steps if st <= fstep]
+        s.inherited_chats = len(inherited_chat_list)
+        s.chat_steps = sorted(set(inherited_chat_list) | set(s.chat_steps))
+
+        if not s.prompts and parent_obj.prompts:
+            s.prompts = [pr for pr in parent_obj.prompts if pr.step <= fstep][-5:]
 
     sessions.sort(key=lambda s: s.last_ts_iso, reverse=True)
     clean_origin = {k: v[1] for k, v in origin_map.items()}

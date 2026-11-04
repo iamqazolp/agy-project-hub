@@ -154,13 +154,21 @@ class TestProtobufAndScanner(unittest.TestCase):
                     "step_index": 1,
                     "type": "PLANNER_RESPONSE",
                     "created_at": "2026-11-01T10:01:00Z",
-                    "input_tokens": 20000,
-                    "cache_read_tokens": 5000,
+                    "input_tokens": 120000,
+                    "cache_read_tokens": 30000,
                     "output_tokens": 1200,
                     "tool_calls": [
                         {"name": "write_file", "args": {"Path": str(workspace.resolve() / "app.py")}},
                         {"name": "write_file", "args": {"Path": str(guide_path)}},
                     ],
+                },
+                {
+                    "step_index": 2,
+                    "type": "PLANNER_RESPONSE",
+                    "created_at": "2026-11-01T10:02:00Z",
+                    "input_tokens": 20000,
+                    "cache_read_tokens": 5000,
+                    "output_tokens": 600,
                 },
             ]
             (brain_dir / root_sid / ".system_generated" / "logs" / "transcript.jsonl").write_text(
@@ -170,13 +178,13 @@ class TestProtobufAndScanner(unittest.TestCase):
 
             fork_steps = [
                 {
-                    "step_index": 2,
+                    "step_index": 3,
                     "type": "USER_INPUT",
                     "created_at": "2026-11-01T10:05:00Z",
                     "content": f"<USER_REQUEST>Forked session in {ws_str} from {root_sid}</USER_REQUEST>",
                 },
                 {
-                    "step_index": 3,
+                    "step_index": 4,
                     "type": "PLANNER_RESPONSE",
                     "created_at": "2026-11-01T10:06:00Z",
                     "input_tokens": 21200,
@@ -194,7 +202,12 @@ class TestProtobufAndScanner(unittest.TestCase):
             by_id = {s.id: s for s in sessions}
             self.assertIsNone(by_id[root_sid].parent_id)
             self.assertEqual(by_id[fork_sid].parent_id, root_sid)
-            self.assertEqual(by_id[fork_sid].fork_step, 1)
+            self.assertEqual(by_id[fork_sid].fork_step, 2)
+            # Fork inherits pre-fork peak context (150k), compaction count (1), and chat count (1)
+            self.assertEqual(by_id[fork_sid].peak_ctx_tokens, 150000)
+            self.assertEqual(by_id[fork_sid].compaction_count, 1)
+            self.assertEqual(by_id[fork_sid].inherited_compactions, 1)
+            self.assertEqual(by_id[fork_sid].inherited_chats, 1)
 
             git_state = collect_git_state(workspace)
             self.assertEqual(git_state.current_branch, "main")
@@ -214,6 +227,13 @@ class TestProtobufAndScanner(unittest.TestCase):
             self.assertIn("Recent Commits on `main`", hub_text)
             self.assertIn(f"| `{root_sid}` |", hub_text)
             self.assertNotIn("[↗ Open]", hub_text)
+            self.assertIn("flowchart TD", hub_text)
+            self.assertIn("classDef sessCurrent", hub_text)
+            self.assertIn("classDef sessFork", hub_text)
+            self.assertIn("🔀 Fork @ 2 · 66666666 (d=1)", hub_text)
+            self.assertIn("N1 ==> N2", hub_text)
+            self.assertIn("+1 chats (2 tot)", hub_text)
+            self.assertIn("1x cmp (1x inh)", hub_text)
             self.assertTrue((workspace / ".local-notes" / "PROJECT_HUB.md").exists())
 
 

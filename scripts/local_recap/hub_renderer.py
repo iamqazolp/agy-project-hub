@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -26,6 +27,16 @@ from .models import (
     format_size,
     format_tokens,
 )
+
+
+def _sanitize_mermaid_label(text: str, max_len: int = 34) -> str:
+    """Clean and truncate arbitrary text so it is safe inside a Mermaid double-quoted label."""
+    cleaned = re.sub(r'["\'`\[\](){}<>#;&|]+', " ", text or "")
+    cleaned = " ".join(cleaned.split())
+    if len(cleaned) <= max_len:
+        return cleaned
+    cut = cleaned[: max_len - 1].rsplit(" ", 1)[0]
+    return (cut if len(cut) >= max_len // 2 else cleaned[: max_len - 1]) + "…"
 
 
 def format_context_meter(s: SessionInfo) -> str:
@@ -309,7 +320,13 @@ def render_project_hub(
         cur_ctx = format_tokens(s.current_ctx_tokens)
         peak_ctx = format_tokens(s.peak_ctx_tokens)
         out_tok = format_tokens(s.total_output_tokens)
-        compact_note = f" (`{s.compaction_count}x compacted`)" if s.compaction_count > 0 else ""
+        if s.compaction_count > 0:
+            if s.inherited_compactions > 0:
+                compact_note = f" (`{s.compaction_count}x compacted`, `{s.inherited_compactions}x` inherited)"
+            else:
+                compact_note = f" (`{s.compaction_count}x compacted`)"
+        else:
+            compact_note = ""
         ctx_cell = f"**`{cur_ctx}`** active / `{peak_ctx}` peak{compact_note} · `{out_tok}` out"
 
         step_span = s.last_step - s.first_step + 1
@@ -319,10 +336,17 @@ def render_project_hub(
             if child_subs
             else ""
         )
-        chats_cell = (
-            f"**`{s.user_chats} chats`** · `{step_span} steps` "
-            f"(`#{s.first_step}..#{s.last_step}`){sub_badge}"
-        )
+        if s.parent_id and not s.is_subagent and s.inherited_chats > 0:
+            tot_c = s.user_chats + s.inherited_chats
+            chats_cell = (
+                f"**`+{s.user_chats} chats`** (`{tot_c} total`) · `+{step_span} steps` "
+                f"(`#{s.first_step}..#{s.last_step}`){sub_badge}"
+            )
+        else:
+            chats_cell = (
+                f"**`{s.user_chats} chats`** · `{step_span} steps` "
+                f"(`#{s.first_step}..#{s.last_step}`){sub_badge}"
+            )
         time_cell = f"`{s.started_local}` -> `{s.last_active}`"
 
         valid_authored = [a for a in (s.authored_docs or []) if a in canonical_mds]
@@ -362,53 +386,193 @@ def render_project_hub(
     hub_lines.extend(
         [
             "",
-            "### Multi-Root Session Fork Forest (`mermaid`)",
+            "### 🗺️ Multi-Root Session & Fork Lineage (`mermaid`)",
             "",
             "```mermaid",
-            "%%{init: {'flowchart': {'padding': 24, 'nodeSpacing': 45, 'rankSpacing': 65, 'wrappingWidth': 320}}}%%",
-            "flowchart LR",
+            "%%{init: {'flowchart': {'curve': 'basis', 'padding': 16, 'nodeSpacing': 52, 'rankSpacing': 64, 'wrappingWidth': 340}}}%%",
+            "flowchart TD",
+            "    classDef wsHub fill:#10b98122,stroke:#10b981,stroke-width:2px,rx:10,ry:10",
+            "    classDef sessCurrent fill:#3b82f624,stroke:#3b82f6,stroke-width:2.5px,rx:10,ry:10",
+            "    classDef sessHot fill:#f59e0b24,stroke:#f59e0b,stroke-width:2px,rx:10,ry:10",
+            "    classDef sessRoot fill:#64748b22,stroke:#64748b,stroke-width:1.5px,rx:10,ry:10",
+            "    classDef sessFork fill:#a855f724,stroke:#a855f7,stroke-width:2px,rx:10,ry:10",
+            "    classDef subNode fill:#06b6d422,stroke:#06b6d4,stroke-width:1.5px,stroke-dasharray: 4 3,rx:10,ry:10",
         ]
     )
+
+    pad = "\u00a0\u00a0"
+    ws_title = _sanitize_mermaid_label(workspace.name, 28)
+    branch_title = _sanitize_mermaid_label(cur_branch, 20)
+    ws_line1 = f"{pad}<b>⚡ {ws_title}</b> · 🌿 {branch_title}{pad}"
+    ws_line2 = (
+        f"{pad}{len(primary_sessions)} session{'s' if len(primary_sessions) != 1 else ''} ({root_count} tree{'s' if root_count != 1 else ''}"
+        + (f", {fork_count} fork{'s' if fork_count != 1 else ''}" if fork_count else "")
+        + (f", {len(subagent_sessions)} subagent{'s' if len(subagent_sessions) != 1 else ''}" if subagent_sessions else "")
+        + f") · 💬 {total_chats} chats · 🧠 {format_tokens(total_output_tok)} out{pad}"
+    )
+    hub_lines.append(f'    WS("{ws_line1}<br/>{ws_line2}")')
+    hub_lines.append("    class WS wsHub")
+
     trees: dict[int, list[SessionInfo]] = {}
     for s in primary_by_start:
         trees.setdefault(s.tree_num, []).append(s)
 
-    for t_num in sorted(trees.keys()):
+    sorted_tnums = sorted(trees.keys())
+    tree_root_node: dict[int, str] = {}
+    tree_bottom_node: dict[int, str] = {}
+
+    for t_num in sorted_tnums:
         tree_sessions = trees[t_num]
         root_sess = next((x for x in tree_sessions if not x.parent_id), tree_sessions[0])
-        r_short = root_sess.id[:8]
-        hub_lines.append(f'    subgraph T{t_num}["Tree #{t_num} · {r_short}"]')
+        root_node_id = f"N{session_num_map[root_sess.id]}"
+        tree_root_node[t_num] = root_node_id
+        bottom_candidate = root_node_id
+        best_depth = -1
+
         for s in tree_sessions:
             num = session_num_map[s.id]
+            node_id = f"N{num}"
             s_short = s.id[:8]
             ctx_lbl = format_tokens(s.current_ctx_tokens)
             peak_lbl = format_tokens(s.peak_ctx_tokens)
-            if s.id == sid:
-                role_tag = "[CURRENT]"
-            elif s.parent_id:
-                role_tag = f"(Fork @{s.fork_step})"
+            is_cur = s.id == sid
+
+            if s.peak_ctx_tokens > 270_000:
+                pct_1m = min(100, round(s.current_ctx_tokens / 1_000_000 * 100))
+                ctx_dot = "🟠" if pct_1m >= 80 else ("🟡" if pct_1m >= 50 else "🟢")
+                is_hot = pct_1m >= 80
             else:
-                role_tag = "(Root)"
-            child_sub_count = len(subagents_by_parent.get(s.id, []))
-            lines_in_box = [
-                f"S{num}: {s_short} {role_tag}",
-                f"{s.user_chats} chats · steps {s.first_step}..{s.last_step}",
-                f"Ctx: {ctx_lbl} / {peak_lbl}",
-            ]
-            if child_sub_count > 0:
-                lines_in_box.append(f"+{child_sub_count} subagent{'s' if child_sub_count != 1 else ''}")
-            label_str = "<br/>".join(lines_in_box)
-            hub_lines.append(f'        N{num}["{label_str}"]')
+                ctx_dot = "🟠" if s.current_ctx_tokens >= 185_000 else ("🟡" if s.current_ctx_tokens >= 100_000 else "🟢")
+                is_hot = s.current_ctx_tokens >= 185_000
+
+            fork_at = f" @ {s.fork_step}" if s.fork_step is not None else ""
+            if is_cur and s.parent_id:
+                header_line = f"<b>⚡ Fork{fork_at} · {s_short} (d={s.fork_depth}) [CURRENT]</b>"
+            elif is_cur:
+                header_line = f"<b>⚡ Tree #{t_num} · {s_short} [CURRENT]</b>"
+            elif s.parent_id:
+                header_line = f"<b>🔀 Fork{fork_at} · {s_short} (d={s.fork_depth})</b>"
+            else:
+                header_line = f"<b>🌱 Tree #{t_num} · {s_short}</b>"
+
+            lines_in_box = [header_line]
+            if s.title:
+                safe_title = _sanitize_mermaid_label(s.title, max_len=34)
+                if safe_title:
+                    lines_in_box.append(f"<i>{safe_title}</i>")
+
+            step_span = max(0, s.last_step - s.first_step + 1)
+            out_lbl = format_tokens(s.total_output_tokens)
+            valid_authored = [a for a in (s.authored_docs or []) if a in canonical_mds]
+            doc_badge = f" · 📚 {len(valid_authored)}" if valid_authored else ""
+            if s.parent_id and s.inherited_chats > 0:
+                tot_c = s.user_chats + s.inherited_chats
+                lines_in_box.append(
+                    f"💬 +{s.user_chats} chats ({tot_c} tot) · +{step_span} steps · {out_lbl} out{doc_badge}"
+                )
+            else:
+                lines_in_box.append(
+                    f"💬 {s.user_chats} chat{'s' if s.user_chats != 1 else ''} · {step_span} steps · {out_lbl} out{doc_badge}"
+                )
+
+            if s.compaction_count > 0:
+                if s.inherited_compactions > 0:
+                    cmp_badge = f" · {s.compaction_count}x cmp ({s.inherited_compactions}x inh)"
+                else:
+                    cmp_badge = f" · {s.compaction_count}x cmp"
+            else:
+                cmp_badge = ""
+            lines_in_box.append(f"{ctx_dot} Ctx: {ctx_lbl} / {peak_lbl}{cmp_badge}")
+
+            label_str = "<br/>".join(f"{pad}{ln}{pad}" for ln in lines_in_box)
+            hub_lines.append(f'    {node_id}("{label_str}")')
+
+            if is_cur:
+                node_cls = "sessCurrent"
+            elif s.parent_id:
+                node_cls = "sessFork"
+            elif is_hot:
+                node_cls = "sessHot"
+            else:
+                node_cls = "sessRoot"
+            hub_lines.append(f"    class {node_id} {node_cls}")
+
+            if s.fork_depth >= best_depth:
+                best_depth = s.fork_depth
+                bottom_candidate = node_id
+
+            child_subs = subagents_by_parent.get(s.id, [])
+            if child_subs:
+                sub_node_id = f"SUB{num}"
+                if len(child_subs) == 1:
+                    sub0 = child_subs[0]
+                    ag_lbl = _sanitize_mermaid_label(sub0.agent_name or "subagent", 14)
+                    sub_steps = max(0, sub0.last_step - sub0.first_step + 1)
+                    sub_out = format_tokens(sub0.total_output_tokens)
+                    sub_ctx = format_tokens(sub0.current_ctx_tokens)
+                    sub_at = f" @ {sub0.fork_step}" if sub0.fork_step is not None else ""
+                    sub_label = (
+                        f"{pad}<b>🤖 {ag_lbl}{sub_at} · {sub0.id[:8]}</b>{pad}<br/>"
+                        f"{pad}{sub_steps} steps · Ctx {sub_ctx} · {sub_out} out{pad}"
+                    )
+                else:
+                    ag_types = sorted({_sanitize_mermaid_label(x.agent_name or "subagent", 12) for x in child_subs})
+                    types_str = ", ".join(ag_types[:2]) + ("…" if len(ag_types) > 2 else "")
+                    tot_sub_steps = sum(max(0, x.last_step - x.first_step + 1) for x in child_subs)
+                    tot_sub_out = format_tokens(sum(x.total_output_tokens for x in child_subs))
+                    sub_label = (
+                        f"{pad}<b>🤖 {len(child_subs)} Subagents ({types_str})</b>{pad}<br/>"
+                        f"{pad}{tot_sub_steps} steps total · {tot_sub_out} out{pad}"
+                    )
+                hub_lines.append(f'    {sub_node_id}("{sub_label}")')
+                hub_lines.append(f"    class {sub_node_id} subNode")
+                hub_lines.append(f"    {node_id} -.-> {sub_node_id}")
+                if s.fork_depth + 1 >= best_depth:
+                    best_depth = s.fork_depth + 1
+                    bottom_candidate = sub_node_id
+
         for s in tree_sessions:
             num = session_num_map[s.id]
             if s.parent_id and s.parent_id in session_num_map:
                 pnum = session_num_map[s.parent_id]
-                hub_lines.append(f'        N{pnum} -- "fork @ {s.fork_step}" --> N{num}')
-        hub_lines.append("    end")
+                hub_lines.append(f"    N{pnum} ==> N{num}")
+
+        tree_bottom_node[t_num] = bottom_candidate
+
+    max_cols = 3
+    for idx, t_num in enumerate(sorted_tnums):
+        r_node = tree_root_node[t_num]
+        if idx < max_cols:
+            hub_lines.append(f"    WS --> {r_node}")
+        else:
+            prev_t_num = sorted_tnums[idx - max_cols]
+            prev_bottom = tree_bottom_node[prev_t_num]
+            hub_lines.append(f"    {prev_bottom} ~~~ {r_node}")
 
     hub_lines.extend(
         [
             "```",
+            "",
+            "<details>",
+            "<summary>ℹ️ <strong>Legends & Shorthand</strong> — Click to expand</summary>",
+            "",
+            "| Card / Shorthand | Meaning |",
+            "| :--- | :--- |",
+            "| 🟢 **Emerald Border** (`Workspace`) | Project workspace summary (branch, total sessions, chats, output tokens) |",
+            "| 🔵 **Blue Border** (`[CURRENT]`) | Active session for this `PROJECT_HUB.md` view |",
+            "| ⚪ **Slate Border** (`Tree #N`) | Primary root session (`step 0`) |",
+            "| 🟠 **Amber Border** (`≥185k`) | High context load (approaching `256k` compaction ceiling) |",
+            "| 🟣 **Purple Border** (`Fork @ step`) | Branched session forked from a parent session at `@ step` |",
+            "| 🔹 **Dashed Cyan** (`Subagents`) | Background subagent run(s) spawned by parent session |",
+            "| `d=N` | Fork depth from the root session |",
+            "| `+N chats (M tot)` | `N` new chats in this fork (`M` cumulative chats including parent history) |",
+            "| `out` | Cumulative output tokens generated by the session |",
+            "| `📚 N` | Number of generated notes authored in the session |",
+            "| `Ctx: active / peak` | Current context tokens vs. highest context tokens reached in trajectory |",
+            "| `Nx cmp` | Total number of context window compactions (`N`) |",
+            "| `Mx inh` | Number of compactions (`M`) inherited from parent before the fork step |",
+            "",
+            "</details>",
             "",
             "---",
             "",
@@ -515,7 +679,17 @@ def sync_all_targets(
             for img_name, src_img in canonical_images.items():
                 dst_img = orig_bdir / img_name
                 if src_img.resolve() != dst_img.resolve():
-                    shutil.copy2(src_img, dst_img)
+                    need_copy = True
+                    if dst_img.exists():
+                        try:
+                            s_st = src_img.stat()
+                            d_st = dst_img.stat()
+                            if s_st.st_size == d_st.st_size and abs(s_st.st_mtime - d_st.st_mtime) <= 1.0:
+                                need_copy = False
+                        except Exception:
+                            pass
+                    if need_copy:
+                        shutil.copy2(src_img, dst_img)
             orig_md = orig_bdir / doc.name
             rewritten_orig = rewrite_md_images_for_brain_dir(raw_txt, orig_bdir)
             _write_text_preserving_mtime(orig_md, rewritten_orig, doc.mtime)
@@ -563,12 +737,22 @@ def sync_all_targets(
             now_str=now_str,
         )
         hub_path = tdir / "PROJECT_HUB.md"
-        hub_path.write_text(hub_text, encoding="utf-8", newline="\n")
-        write_artifact_metadata(
-            hub_path,
-            f"Unified Native Antigravity Command Center for {workspace.name} ({len(sorted_docs)} synced artifacts, fork tree, and session telemetry across {len(sessions)} sessions).",
-            sid,
-        )
+        should_write_hub = True
+        if hub_path.exists():
+            try:
+                old_hub = hub_path.read_text(encoding="utf-8", errors="ignore")
+                ts_re = re.compile(r"\b\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\b")
+                if ts_re.sub("<TS>", old_hub).strip() == ts_re.sub("<TS>", hub_text).strip():
+                    should_write_hub = False
+            except Exception:
+                pass
+        if should_write_hub:
+            hub_path.write_text(hub_text, encoding="utf-8", newline="\n")
+            write_artifact_metadata(
+                hub_path,
+                f"Unified Native Antigravity Command Center for {workspace.name} ({len(sorted_docs)} synced artifacts, fork tree, and session telemetry across {len(sessions)} sessions).",
+                sid,
+            )
         generated_hubs.append(hub_path)
 
     return generated_hubs
