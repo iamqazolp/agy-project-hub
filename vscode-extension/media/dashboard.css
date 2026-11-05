@@ -92,8 +92,9 @@ body {
   margin: 0;
   padding: 0;
   width: 100%;
-  height: 100vh;
-  overflow: hidden;
+  min-height: 100vh;
+  overflow-x: hidden;
+  overflow-y: auto;
   background: var(--lf-bg);
   color: var(--lf-fg);
   font-family: var(--lf-font-sans);
@@ -103,12 +104,30 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Explicit visible scrollbars for Main Hub and all panes */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--lf-panel);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--lf-border-strong);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--lf-fg-subtle);
+}
+
 #app {
   display: flex;
   flex-direction: column;
   width: 100%;
-  height: 100vh;
-  overflow: hidden;
+  min-height: 100vh;
 }
 
 .svg-icon {
@@ -205,6 +224,9 @@ body {
  * Langfuse Top Navigation Bar
  * ------------------------------------------------------------------ */
 .lf-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -403,17 +425,12 @@ body {
  * ------------------------------------------------------------------ */
 .lf-workbench {
   flex: 1;
-  min-height: 0;
   display: grid;
   grid-template-columns: 288px minmax(0, 1fr);
-  overflow: hidden;
+  align-items: stretch;
 }
 
 @media (max-width: 860px) {
-  html, body, #app {
-    height: auto;
-    overflow: auto;
-  }
   .lf-workbench {
     grid-template-columns: 1fr;
   }
@@ -423,9 +440,11 @@ body {
  * Left Pane: Langfuse Trace & Observation Tree
  * ------------------------------------------------------------------ */
 .lf-tree-pane {
+  position: sticky;
+  top: 42px;
+  height: calc(100vh - 42px);
   display: flex;
   flex-direction: column;
-  min-height: 0;
   border-right: 1px solid var(--lf-border);
   background: var(--lf-panel);
   overflow: hidden;
@@ -518,16 +537,16 @@ body {
   min-height: 120px;
   overflow-y: auto;
   padding: 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  display: block;
 }
 
 .lf-tree-node {
   position: relative;
   display: flex;
   flex-direction: column;
+  flex-shrink: 0;
   gap: 3px;
+  margin-bottom: 3px;
   padding: 6px 8px;
   border-radius: 5px;
   border: 1px solid transparent;
@@ -684,16 +703,16 @@ body {
   flex: 1;
   overflow-y: auto;
   padding: 4px 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
+  display: block;
 }
 
 .lf-rail-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-shrink: 0;
   gap: 6px;
+  margin-bottom: 2px;
   padding: 4px 6px;
   border-radius: 4px;
   cursor: pointer;
@@ -729,8 +748,7 @@ body {
 .lf-stage {
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
+  min-width: 0;
   background: var(--lf-bg);
 }
 
@@ -856,7 +874,7 @@ body {
 
 /* 2. Langfuse Context & Cache Trajectory Chart */
 .lf-chart-pane {
-  height: 168px;
+  height: 205px;
   flex-shrink: 0;
   border-bottom: 1px solid var(--lf-border);
   display: flex;
@@ -949,10 +967,9 @@ body {
 /* 3. Bottom Split: Langfuse Observations (Prompts/Turns) + Git Graph */
 .lf-bottom-split {
   flex: 1;
-  min-height: 0;
   display: grid;
   grid-template-columns: minmax(320px, 1.05fr) minmax(320px, 1fr);
-  overflow: hidden;
+  align-items: stretch;
 }
 
 .lf-bottom-split.mode-prompts {
@@ -973,9 +990,8 @@ body {
 .lf-obs-pane {
   display: flex;
   flex-direction: column;
-  min-height: 0;
+  min-width: 0;
   border-right: 1px solid var(--lf-border);
-  overflow: hidden;
   background: var(--lf-bg);
 }
 
@@ -1016,20 +1032,23 @@ body {
 }
 
 .lf-obs-scroll {
-  flex: 1;
-  min-height: 0;
+  max-height: 540px;
   overflow-y: auto;
   padding: 8px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  display: block;
 }
 
 .lf-obs-card {
+  display: block;
+  flex-shrink: 0;
+  margin-bottom: 8px;
   border-radius: 5px;
   border: 1px solid var(--lf-border);
   background: var(--lf-card);
-  overflow: hidden;
+}
+
+.lf-obs-card:last-child {
+  margin-bottom: 0;
 }
 
 .lf-obs-card:hover {
@@ -1041,9 +1060,11 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 4px 8px;
+  padding: 5px 9px;
   background: var(--lf-header);
   border-bottom: 1px solid var(--lf-border-subtle);
+  border-top-left-radius: 4px;
+  border-top-right-radius: 4px;
   font-family: var(--lf-font-mono);
   font-size: 10px;
   color: var(--lf-fg-muted);
@@ -1054,17 +1075,18 @@ body {
   align-items: center;
   gap: 6px;
   min-width: 0;
+  flex-wrap: wrap;
 }
 
 .lf-obs-body {
-  padding: 7px 10px;
+  padding: 8px 10px;
   font-family: var(--lf-font-mono);
   font-size: 11px;
   line-height: 1.45;
   color: var(--lf-fg);
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 76px;
+  max-height: 96px;
   overflow-y: auto;
 }
 
@@ -1072,8 +1094,7 @@ body {
 .lf-git-pane {
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
+  min-width: 0;
   background: var(--lf-bg);
 }
 
@@ -1113,8 +1134,7 @@ body {
 }
 
 .lf-git-scroll {
-  flex: 1;
-  min-height: 0;
+  max-height: 430px;
   overflow-y: auto;
   overflow-x: hidden;
 }
@@ -1268,10 +1288,8 @@ body {
  * ------------------------------------------------------------------ */
 .lf-table-view {
   flex: 1;
-  min-height: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
   background: var(--lf-bg);
 }
 
@@ -1340,10 +1358,9 @@ body {
  * ------------------------------------------------------------------ */
 .lf-repo-view {
   flex: 1;
-  min-height: 0;
   display: grid;
   grid-template-columns: minmax(380px, 1.15fr) minmax(360px, 1fr);
-  overflow: hidden;
+  align-items: start;
 }
 
 /* Toast Notification */
