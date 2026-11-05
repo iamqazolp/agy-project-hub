@@ -248,6 +248,11 @@ class TestProtobufAndScanner(unittest.TestCase):
             self.assertEqual(len(fork_payload["trajectory"]), 3)
             self.assertTrue(fork_payload["trajectory"][0]["inherited"])
             self.assertFalse(fork_payload["trajectory"][-1]["inherited"])
+            self.assertEqual(fork_payload["cacheReadTokens"], 5000)
+            self.assertEqual(fork_payload["cacheHitPct"], 19)
+            root_payload = next(s for s in payload["sessions"] if s["id"] == root_sid)
+            self.assertEqual(root_payload["totalToolCalls"], 2)
+            self.assertEqual(root_payload["topTools"][0]["name"], "write_file")
             self.assertGreaterEqual(len(payload["git"]["graphCommits"]), 1)
             self.assertIn("parents", payload["git"]["graphCommits"][0])
 

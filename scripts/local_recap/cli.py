@@ -119,10 +119,17 @@ def build_telemetry_payload(
                 continue
             compacted = bool(prev_tok > 60_000 and tok < prev_tok * 0.5)
             prev_tok = tok
+            c_tok = s.step_cache_tokens.get(st, 0)
+            o_tok = s.step_out_tokens.get(st, 0)
+            t_list = s.step_tools.get(st, [])
             traj.append(
                 {
                     "step": st,
                     "tokens": tok,
+                    "cacheTokens": c_tok,
+                    "inputTokens": max(0, tok - c_tok),
+                    "outputTokens": o_tok,
+                    "tools": t_list[:6],
                     "inherited": bool(s.parent_id and fstep >= 0 and st <= fstep),
                     "compacted": compacted,
                 }
@@ -130,6 +137,24 @@ def build_telemetry_payload(
 
         valid_authored = [a for a in (s.authored_docs or []) if a in canonical_mds]
         source_env = "cli" if "antigravity-cli" in str(s.path) else "ide"
+        cur_ctx = s.current_ctx_tokens
+        cur_cache = s.current_cache_tokens
+        cur_input = s.current_input_tokens if s.current_input_tokens > 0 else max(0, cur_ctx - cur_cache)
+        cache_hit_pct = round((cur_cache / cur_ctx) * 100) if cur_ctx > 0 else 0
+        top_tools = [
+            {"name": k, "count": v}
+            for k, v in sorted(s.tool_counts.items(), key=lambda x: (-x[1], x[0]))[:8]
+        ]
+        total_tool_calls = sum(s.tool_counts.values())
+
+        def _ctx_near_step(step_num: int) -> int:
+            if step_num < 0:
+                return 0
+            for candidate in (step_num, step_num + 1, step_num + 2, step_num - 1):
+                if candidate in s.step_ctx_tokens and s.step_ctx_tokens[candidate] > 0:
+                    return s.step_ctx_tokens[candidate]
+            return 0
+
         serialized_sessions.append(
             {
                 "id": s.id,
@@ -145,6 +170,7 @@ def build_telemetry_payload(
                 "rootId": s.root_id,
                 "forkDepth": s.fork_depth,
                 "forkStep": s.fork_step,
+                "lineageSource": s.lineage_source,
                 "firstStep": s.first_step,
                 "lastStep": s.last_step,
                 "stepSpan": max(0, s.last_step - s.first_step + 1),
@@ -155,12 +181,19 @@ def build_telemetry_payload(
                 "userChats": s.user_chats,
                 "inheritedChats": s.inherited_chats,
                 "totalChats": s.user_chats + s.inherited_chats,
-                "currentCtxTokens": s.current_ctx_tokens,
-                "currentCtxFormatted": format_tokens(s.current_ctx_tokens),
+                "currentCtxTokens": cur_ctx,
+                "currentCtxFormatted": format_tokens(cur_ctx),
+                "cacheReadTokens": cur_cache,
+                "cacheReadFormatted": format_tokens(cur_cache),
+                "freshInputTokens": cur_input,
+                "freshInputFormatted": format_tokens(cur_input),
+                "cacheHitPct": cache_hit_pct,
                 "peakCtxTokens": s.peak_ctx_tokens,
                 "peakCtxFormatted": format_tokens(s.peak_ctx_tokens),
                 "totalOutputTokens": s.total_output_tokens,
                 "totalOutputFormatted": format_tokens(s.total_output_tokens),
+                "totalToolCalls": total_tool_calls,
+                "topTools": top_tools,
                 "compactionCount": s.compaction_count,
                 "inheritedCompactions": s.inherited_compactions,
                 "authoredDocs": valid_authored,
@@ -169,7 +202,13 @@ def build_telemetry_payload(
                     for t in list(s.touched_files.values())[:10]
                 ],
                 "prompts": [
-                    {"step": p.step, "timestamp": p.timestamp, "text": p.text}
+                    {
+                        "step": p.step,
+                        "timestamp": p.timestamp,
+                        "text": p.text,
+                        "ctxTokens": _ctx_near_step(p.step),
+                        "ctxFormatted": format_tokens(_ctx_near_step(p.step)) if _ctx_near_step(p.step) > 0 else "",
+                    }
                     for p in s.prompts
                 ],
                 "trajectory": traj,

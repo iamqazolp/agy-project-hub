@@ -79,11 +79,17 @@ class SessionInfo(DictCompatMixin):
     step_timestamps: dict[int, str] = field(default_factory=dict)
     step_end_tokens: dict[int, int] = field(default_factory=dict)
     step_ctx_tokens: dict[int, int] = field(default_factory=dict)
+    step_cache_tokens: dict[int, int] = field(default_factory=dict)
+    step_out_tokens: dict[int, int] = field(default_factory=dict)
+    step_tools: dict[int, list[str]] = field(default_factory=dict)
+    tool_counts: dict[str, int] = field(default_factory=dict)
     chat_steps: list[int] = field(default_factory=list)
     first_planner_ctx_tokens: int = 0
     user_chats: int = 0
     inherited_chats: int = 0
     current_ctx_tokens: int = 0
+    current_cache_tokens: int = 0
+    current_input_tokens: int = 0
     peak_ctx_tokens: int = 0
     total_output_tokens: int = 0
     compaction_count: int = 0

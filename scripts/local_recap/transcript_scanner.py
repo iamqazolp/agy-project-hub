@@ -91,10 +91,16 @@ def scan_brain_sessions(
         step_timestamps: dict[int, str] = {}
         step_end_tokens: dict[int, int] = {}
         step_ctx_tokens: dict[int, int] = {}
+        step_cache_tokens: dict[int, int] = {}
+        step_out_tokens: dict[int, int] = {}
+        step_tools: dict[int, list[str]] = {}
+        tool_counts: dict[str, int] = {}
         chat_steps: list[int] = []
         first_planner_ctx_tokens = 0
         user_chat_count = 0
         current_ctx_tokens = 0
+        current_cache_tokens = 0
+        current_input_tokens = 0
         peak_ctx_tokens = 0
         total_output_tokens = 0
         compaction_count = 0
@@ -154,10 +160,14 @@ def scan_brain_sessions(
                             last_known_end_tokens = ctx_tok + out_tok
                             if isinstance(s_idx, int):
                                 step_ctx_tokens[s_idx] = ctx_tok
+                                step_cache_tokens[s_idx] = cache_tok
+                                step_out_tokens[s_idx] = out_tok
                             if prev_ctx > 60000 and ctx_tok < prev_ctx * 0.5:
                                 compaction_count += 1
                             prev_ctx = ctx_tok
                             current_ctx_tokens = ctx_tok
+                            current_cache_tokens = cache_tok
+                            current_input_tokens = in_tok
                             if ctx_tok > peak_ctx_tokens:
                                 peak_ctx_tokens = ctx_tok
                         if isinstance(s_idx, int) and last_known_end_tokens > 0:
@@ -173,11 +183,15 @@ def scan_brain_sessions(
                                     PromptEntry(
                                         step=s_idx if s_idx is not None else -1,
                                         timestamp=utc_iso_to_local_str(created_at, include_seconds=False),
-                                        text=req[:220] + ("..." if len(req) > 220 else ""),
+                                        text=req[:360] + ("..." if len(req) > 360 else ""),
                                     )
                                 )
                         for tc in obj.get("tool_calls") or []:
                             tname = tc.get("name", "")
+                            if tname:
+                                tool_counts[tname] = tool_counts.get(tname, 0) + 1
+                                if isinstance(s_idx, int):
+                                    step_tools.setdefault(s_idx, []).append(tname)
                             if tname in {
                                 "write_file",
                                 "edit_file",
@@ -258,14 +272,20 @@ def scan_brain_sessions(
                     step_timestamps=step_timestamps,
                     step_end_tokens=step_end_tokens,
                     step_ctx_tokens=step_ctx_tokens,
+                    step_cache_tokens=step_cache_tokens,
+                    step_out_tokens=step_out_tokens,
+                    step_tools=step_tools,
+                    tool_counts=tool_counts,
                     chat_steps=chat_steps,
                     first_planner_ctx_tokens=first_planner_ctx_tokens,
                     user_chats=user_chat_count,
                     current_ctx_tokens=current_ctx_tokens,
+                    current_cache_tokens=current_cache_tokens,
+                    current_input_tokens=current_input_tokens,
                     peak_ctx_tokens=peak_ctx_tokens,
                     total_output_tokens=total_output_tokens,
                     compaction_count=compaction_count,
-                    prompts=user_prompts[-8:],
+                    prompts=user_prompts[-20:],
                     artifacts=top_files,
                     authored_docs=sorted(authored_docs),
                     touched_files=touched_files,
@@ -418,6 +438,21 @@ def scan_brain_sessions(
         }
         combined_ctx_map = {**inherited_ctx_map, **s.step_ctx_tokens}
         s.step_ctx_tokens = combined_ctx_map
+
+        inherited_cache_map = {
+            st: tok for st, tok in parent_obj.step_cache_tokens.items() if st <= fstep
+        }
+        s.step_cache_tokens = {**inherited_cache_map, **s.step_cache_tokens}
+
+        inherited_out_map = {
+            st: tok for st, tok in parent_obj.step_out_tokens.items() if st <= fstep
+        }
+        s.step_out_tokens = {**inherited_out_map, **s.step_out_tokens}
+
+        inherited_tools_map = {
+            st: list(tl) for st, tl in parent_obj.step_tools.items() if st <= fstep
+        }
+        s.step_tools = {**inherited_tools_map, **s.step_tools}
 
         prev_c = 0
         stitched_compacts = 0
