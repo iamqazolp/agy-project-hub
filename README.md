@@ -6,6 +6,8 @@ If you run multiple sessions or forks on the same project in Google Antigravity,
 
 It drops a lightweight `.local-notes/` folder into your project containing shortcuts back to the original brain artifacts, and keeps a single `PROJECT_HUB.md` dashboard updated with every note, session, fork tree, and context token count across the repo.
 
+![Project Hub Command Center & .local-notes/ Symlinks](./media/screenshots/project-hub-dashboard.png)
+
 ## What it does
 
 - **Shortcuts instead of copies:** `.local-notes/` holds symlinks pointing straight to the original files in `brain/<session-id>/` (including `PROJECT_HUB.md`), so there is only ever one source of truth.
@@ -32,6 +34,10 @@ Once installed, everything syncs automatically at the end of each turn. Just ope
 2. **Knowledge Base & HTML/PDF Index:** Every Markdown note and interactive HTML/PDF export across all sessions for the project, grouped into Recaps, Deep Dives, and Specs/Plans.
 3. **Session & Fork Telemetry:** A spacious multi-line Mermaid fork forest and table showing every root session and fork (with background subagent runs neatly tucked into collapsible `<details>` dropdowns) and selectable inline-code session IDs.
 4. **Recent Prompts, Branches & Commits:** The last 5 prompts per session plus local Git branches and the last 8 commits on the active branch.
+
+![Multi-Root Session & Fork Lineage Forest](./media/screenshots/fork-lineage-forest.png)
+
+![Session Telemetry, Collapsible Subagents, Prompts & Git History](./media/screenshots/session-telemetry-git.png)
 
 You can also ask the agent directly in chat:
 - *"Recap our progress across all sessions"*
@@ -73,6 +79,8 @@ agy-project-hub/
 │   └── test_local_recap.py       # Unit & end-to-end integration test suite
 ├── resources/
 │   └── viz_template.html         # HTML template for standalone diagrams
+├── media/
+│   └── screenshots/              # README showcase screenshots
 └── vscode-extension/             # "Antigravity Markdown Review" VS Code extension
     ├── package.json
     ├── extension.js
