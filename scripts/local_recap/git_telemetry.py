@@ -64,18 +64,50 @@ def collect_git_state(workspace: Path) -> GitState:
 
     commits_raw = run_git(
         workspace,
-        ["log", "--date=format:%Y-%m-%d %H:%M", "--pretty=format:%h|%ad|%d|%s", "-n", "8"],
+        ["log", "--date=format:%Y-%m-%d %H:%M", "--pretty=format:%h%x09%p%x09%ad%x09%an%x09%d%x09%s", "-n", "12"],
     )
     commits: list[CommitInfo] = []
     for line in commits_raw.splitlines():
-        parts = line.split("|", 3)
-        if len(parts) == 4:
+        parts = line.split("\t", 5)
+        if len(parts) == 6:
             commits.append(
                 CommitInfo(
                     sha=parts[0],
-                    date=parts[1],
-                    refs=parts[2].strip(),
-                    subject=parts[3],
+                    parents=[p for p in parts[1].split(" ") if p],
+                    date=parts[2],
+                    author=parts[3],
+                    refs=parts[4].strip(),
+                    subject=parts[5],
+                )
+            )
+
+    graph_raw = run_git(
+        workspace,
+        [
+            "log",
+            "--branches",
+            "--tags",
+            "--remotes",
+            "HEAD",
+            "--topo-order",
+            "--date=format:%Y-%m-%d %H:%M",
+            "--pretty=format:%h%x09%p%x09%ad%x09%an%x09%D%x09%s",
+            "-n",
+            "45",
+        ],
+    )
+    graph_commits: list[CommitInfo] = []
+    for line in graph_raw.splitlines():
+        parts = line.split("\t", 5)
+        if len(parts) == 6:
+            graph_commits.append(
+                CommitInfo(
+                    sha=parts[0],
+                    parents=[p for p in parts[1].split(" ") if p],
+                    date=parts[2],
+                    author=parts[3],
+                    refs=parts[4].strip(),
+                    subject=parts[5],
                 )
             )
 
@@ -128,6 +160,7 @@ def collect_git_state(workspace: Path) -> GitState:
         current_branch=current_branch,
         branches=branches,
         commits=commits,
+        graph_commits=graph_commits or commits,
         status=status,
         working_tree=WorkingTreeState(
             clean=len(changed_files) == 0,

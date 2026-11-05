@@ -14,7 +14,7 @@ from .artifact_sync import (
     sync_local_shortcuts,
     write_artifact_metadata,
 )
-from .cli import main, resolve_default_brain_dir, run_from_hook, run_sync
+from .cli import build_telemetry_payload, main, resolve_default_brain_dir, run_from_hook, run_sync
 from .git_telemetry import collect_git_state, ensure_git_exclude, run_git
 from .hub_renderer import format_context_meter, render_project_hub, sync_all_targets
 from .models import (

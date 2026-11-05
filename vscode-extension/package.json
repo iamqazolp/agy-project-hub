@@ -1,120 +1,155 @@
 {
-  "name": "agy-markdown-review",
-  "displayName": "Antigravity Markdown Review",
-  "description": "Applies Google Antigravity's Artifact Viewer style (callouts, tables, code blocks, carousels, and file links) to every Markdown review and preview in VS Code.",
+  "name": "agy-project-hub",
+  "displayName": "Antigravity Project Hub",
+  "description": "Live multi-session & fork lineage explorer, interactive context trajectory chart, status bar context meter, and CLI session manager for Google Antigravity.",
   "version": "1.0.0",
   "publisher": "iamqazolp",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/iamqazolp/agy-project-hub.git"
-  },
   "engines": {
-    "vscode": "^1.75.0"
+    "vscode": "^1.85.0"
   },
   "categories": [
     "Other",
-    "Themes",
-    "Programming Languages"
-  ],
-  "keywords": [
-    "antigravity",
-    "markdown",
-    "preview",
-    "review",
-    "artifact"
+    "Visualization",
+    "SCM Providers"
   ],
   "activationEvents": [
-    "onStartupFinished",
-    "onLanguage:markdown",
-    "onCustomEditor:antigravity.markdownReview"
+    "onStartupFinished"
   ],
   "main": "./extension.js",
   "contributes": {
-    "markdown.markdownItPlugins": true,
-    "markdown.previewStyles": [
-      "./media/antigravity-markdown.css"
-    ],
-    "markdown.previewScripts": [
-      "./media/antigravity-markdown.js"
-    ],
-    "customEditors": [
-      {
-        "viewType": "antigravity.markdownReview",
-        "displayName": "Antigravity Markdown Review",
-        "priority": "default",
-        "selector": [
-          {
-            "filenamePattern": "*.md"
-          },
-          {
-            "filenamePattern": "**/*.md"
-          },
-          {
-            "filenamePattern": "*.markdown"
-          }
-        ]
-      }
-    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "agyProjectHub",
+          "title": "Antigravity Project Hub",
+          "icon": "media/hub-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "agyProjectHub": [
+        {
+          "id": "agyProjectHub.sessionsView",
+          "name": "Sessions, Forks & Subagents"
+        },
+        {
+          "id": "agyProjectHub.artifactsView",
+          "name": "Knowledge Base & Git Telemetry"
+        }
+      ]
+    },
     "commands": [
       {
-        "command": "agyMarkdown.openReview",
-        "title": "Antigravity: Open Markdown Review",
-        "icon": "$(sparkle)"
+        "command": "agyProjectHub.openDashboard",
+        "title": "Antigravity: Open Project Hub Visual Dashboard",
+        "icon": "$(graph)"
       },
       {
-        "command": "agyMarkdown.openReviewBeside",
-        "title": "Antigravity: Open Markdown Review to the Side",
-        "icon": "$(open-preview)"
+        "command": "agyProjectHub.openHubMarkdown",
+        "title": "Antigravity: Open PROJECT_HUB.md",
+        "icon": "$(markdown)"
       },
       {
-        "command": "agyMarkdown.editSource",
-        "title": "Antigravity: Edit Raw Markdown",
-        "icon": "$(edit)"
+        "command": "agyProjectHub.refresh",
+        "title": "Antigravity: Sync & Refresh Project Hub",
+        "icon": "$(sync)"
       },
       {
-        "command": "agyMarkdown.openNativeArtifactViewer",
-        "title": "Antigravity: Open in Native Artifact Viewer",
-        "icon": "$(link-external)"
+        "command": "agyProjectHub.resumeSessionInCli",
+        "title": "Resume Session in agy CLI",
+        "icon": "$(terminal)"
       },
       {
-        "command": "agyMarkdown.syncMpeTheme",
-        "title": "Antigravity: Sync Style with Markdown Preview Enhanced"
+        "command": "agyProjectHub.copySessionId",
+        "title": "Copy Session ID",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "agyProjectHub.copyResumeCommand",
+        "title": "Copy 'agy --conversation <id>'",
+        "icon": "$(clippy)"
+      },
+      {
+        "command": "agyProjectHub.selectSessionInDashboard",
+        "title": "Inspect Session in Visual Dashboard",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "agyProjectHub.openArtifact",
+        "title": "Open Artifact",
+        "icon": "$(go-to-file)"
       }
     ],
     "menus": {
-      "editor/title": [
+      "view/title": [
         {
-          "command": "agyMarkdown.openReview",
-          "when": "editorLangId == 'markdown' && activeCustomEditorId != 'antigravity.markdownReview'",
+          "command": "agyProjectHub.openDashboard",
+          "when": "view == agyProjectHub.sessionsView || view == agyProjectHub.artifactsView",
           "group": "navigation@1"
         },
         {
-          "command": "agyMarkdown.openReviewBeside",
-          "when": "editorLangId == 'markdown' && activeCustomEditorId != 'antigravity.markdownReview'",
+          "command": "agyProjectHub.openHubMarkdown",
+          "when": "view == agyProjectHub.sessionsView || view == agyProjectHub.artifactsView",
           "group": "navigation@2"
         },
         {
-          "command": "agyMarkdown.editSource",
-          "when": "activeCustomEditorId == 'antigravity.markdownReview' || activeCustomEditorId == 'antigravity.artifactEditor'",
-          "group": "navigation@1"
+          "command": "agyProjectHub.refresh",
+          "when": "view == agyProjectHub.sessionsView || view == agyProjectHub.artifactsView",
+          "group": "navigation@3"
         }
       ],
-      "explorer/context": [
+      "view/item/context": [
         {
-          "command": "agyMarkdown.openReview",
-          "when": "resourceExtname == '.md' || resourceExtname == '.markdown'",
+          "command": "agyProjectHub.resumeSessionInCli",
+          "when": "view == agyProjectHub.sessionsView && viewItem =~ /^session\\b/",
+          "group": "inline@1"
+        },
+        {
+          "command": "agyProjectHub.copySessionId",
+          "when": "view == agyProjectHub.sessionsView && viewItem =~ /^session\\b/",
+          "group": "inline@2"
+        },
+        {
+          "command": "agyProjectHub.resumeSessionInCli",
+          "when": "view == agyProjectHub.sessionsView && viewItem =~ /^session\\b/",
+          "group": "1_cli@1"
+        },
+        {
+          "command": "agyProjectHub.copyResumeCommand",
+          "when": "view == agyProjectHub.sessionsView && viewItem =~ /^session\\b/",
+          "group": "1_cli@2"
+        },
+        {
+          "command": "agyProjectHub.copySessionId",
+          "when": "view == agyProjectHub.sessionsView && viewItem =~ /^session\\b/",
+          "group": "1_cli@3"
+        },
+        {
+          "command": "agyProjectHub.selectSessionInDashboard",
+          "when": "view == agyProjectHub.sessionsView && viewItem =~ /^session\\b/",
+          "group": "2_inspect@1"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "agyProjectHub.openDashboard",
+          "when": "resourceFilename == PROJECT_HUB.md",
           "group": "navigation@1"
         }
       ]
     },
     "configuration": {
-      "title": "Antigravity Markdown Review",
+      "title": "Antigravity Project Hub",
       "properties": {
-        "agyMarkdown.syncMarkdownPreviewEnhanced": {
+        "agyProjectHub.autoSync": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically apply the Antigravity style and parser extensions to Markdown Preview Enhanced (Crossnote)."
+          "description": "Automatically watch Antigravity brain transcripts and Git state to keep PROJECT_HUB.md and the status bar context meter updated in real time."
+        },
+        "agyProjectHub.pythonPath": {
+          "type": "string",
+          "default": "python3",
+          "description": "Python executable used to run the local_recap telemetry scanner."
         }
       }
     }

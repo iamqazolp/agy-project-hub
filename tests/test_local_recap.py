@@ -16,6 +16,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 import sync_local_notes as sln  # noqa: E402
 from local_recap import (  # noqa: E402
     SessionInfo,
+    build_telemetry_payload,
     collect_git_state,
     file_url,
     format_context_meter,
@@ -235,6 +236,20 @@ class TestProtobufAndScanner(unittest.TestCase):
             self.assertIn("+1 chats (2 tot)", hub_text)
             self.assertIn("1x cmp (1x inh)", hub_text)
             self.assertTrue((workspace / ".local-notes" / "PROJECT_HUB.md").exists())
+
+            # Verify JSON telemetry payload for the VS Code extension
+            payload = build_telemetry_payload(workspace, brain_dir, session_id=fork_sid, sync_hubs=False)
+            self.assertEqual(payload["activeSessionId"], fork_sid)
+            self.assertEqual(payload["kpis"]["primarySessionCount"], 2)
+            self.assertEqual(payload["kpis"]["forkCount"], 1)
+            fork_payload = next(s for s in payload["sessions"] if s["id"] == fork_sid)
+            self.assertEqual(fork_payload["parentId"], root_sid)
+            self.assertEqual(fork_payload["forkStep"], 2)
+            self.assertEqual(len(fork_payload["trajectory"]), 3)
+            self.assertTrue(fork_payload["trajectory"][0]["inherited"])
+            self.assertFalse(fork_payload["trajectory"][-1]["inherited"])
+            self.assertGreaterEqual(len(payload["git"]["graphCommits"]), 1)
+            self.assertIn("parents", payload["git"]["graphCommits"][0])
 
 
 if __name__ == "__main__":

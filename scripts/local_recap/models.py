@@ -178,6 +178,8 @@ class CommitInfo(DictCompatMixin):
     date: str
     refs: str
     subject: str
+    parents: list[str] = field(default_factory=list)
+    author: str = ""
 
 
 @dataclass
@@ -185,6 +187,7 @@ class GitState(DictCompatMixin):
     current_branch: str = "detached"
     branches: list[BranchTip] = field(default_factory=list)
     commits: list[CommitInfo] = field(default_factory=list)
+    graph_commits: list[CommitInfo] = field(default_factory=list)
     status: str = ""
     working_tree: WorkingTreeState = field(default_factory=WorkingTreeState)
 

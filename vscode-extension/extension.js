@@ -1,635 +1,807 @@
 "use strict";
 
 const vscode = require("vscode");
+const cp = require("child_process");
 const fs = require("fs");
-const path = require("path");
 const os = require("os");
+const path = require("path");
 
-const BRAIN_UUID_RE = /\/brain\/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\//;
+let currentPayload = null;
+let isFetching = false;
+let pendingFetch = false;
+let dashboardPanel = null;
+let statusBarItem = null;
+let sessionsProvider = null;
+let artifactsProvider = null;
+let fsWatchers = [];
+let debounceTimer = null;
 
-const ALERT_ICONS = {
-  note: '<svg class="octicon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm8-6.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM6.5 7.75A.75.75 0 0 1 7.25 7h1a.75.75 0 0 1 .75.75v2.75h.25a.75.75 0 0 1 0 1.5h-2a.75.75 0 0 1 0-1.5h.25v-2h-.25a.75.75 0 0 1-.75-.75ZM8 6a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z"></path></svg>',
-  tip: '<svg class="octicon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M8 1.5c-2.363 0-4 1.69-4 3.75 0 .984.424 1.625.984 2.304l.214.253c.223.264.47.556.673.848.284.411.537.896.621 1.49a.75.75 0 0 1-1.484.211c-.04-.282-.163-.547-.37-.847a8.456 8.456 0 0 0-.542-.68c-.084-.1-.173-.205-.268-.32C3.201 7.75 2.5 6.766 2.5 5.25 2.5 2.31 4.863 0 8 0s5.5 2.31 5.5 5.25c0 1.516-.701 2.5-1.328 3.259-.095.115-.184.22-.268.319-.207.245-.383.453-.541.681-.208.3-.33.565-.37.847a.751.751 0 0 1-1.485-.212c.084-.593.337-1.078.621-1.489.203-.292.45-.584.673-.848.075-.088.147-.173.213-.253.561-.679.985-1.32.985-2.304 0-2.06-1.637-3.75-4-3.75ZM5.75 12h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1 0-1.5ZM6 15.25a.75.75 0 0 1 .75-.75h2.5a.75.75 0 0 1 0 1.5h-2.5a.75.75 0 0 1-.75-.75Z"></path></svg>',
-  important: '<svg class="octicon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M0 1.75C0 .784.784 0 1.75 0h12.5C15.216 0 16 .784 16 1.75v9.5A1.75 1.75 0 0 1 14.25 13H8.06l-2.573 2.573A1.458 1.458 0 0 1 3 14.543V13H1.75A1.75 1.75 0 0 1 0 11.25Zm1.75-.25a.25.25 0 0 0-.25.25v9.5c0 .138.112.25.25.25h2a.75.75 0 0 1 .75.75v2.19l2.72-2.72a.749.749 0 0 1 .53-.22h6.5a.25.25 0 0 0 .25-.25v-9.5a.25.25 0 0 0-.25-.25Zm7 2.25v2.5a.75.75 0 0 1-1.5 0v-2.5a.75.75 0 0 1 1.5 0ZM9 9a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z"></path></svg>',
-  warning: '<svg class="octicon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M6.457 1.047c.659-1.234 2.427-1.234 3.086 0l6.082 11.378A1.75 1.75 0 0 1 14.082 15H1.918a1.75 1.75 0 0 1-1.543-2.575Zm1.763.707a.25.25 0 0 0-.44 0L1.698 13.132a.25.25 0 0 0 .22.368h12.164a.25.25 0 0 0 .22-.368Zm.53 3.996v2.5a.75.75 0 0 1-1.5 0v-2.5a.75.75 0 0 1 1.5 0ZM9 11a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z"></path></svg>',
-  caution: '<svg class="octicon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4.47.22A.749.749 0 0 1 5 0h6c.199 0 .389.079.53.22l4.25 4.25c.141.14.22.331.22.53v6a.749.749 0 0 1-.22.53l-4.25 4.25A.749.749 0 0 1 11 16H5a.749.749 0 0 1-.53-.22L.22 11.53A.749.749 0 0 1 0 11V5c0-.199.079-.389.22-.53Zm.84 1.28L1.5 5.31v5.38l3.81 3.81h5.38l3.81-3.81V5.31L10.69 1.5ZM8 4a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 8 4Zm0 8a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z"></path></svg>'
-};
-
-const ALERT_LABELS = {
-  note: "Note",
-  tip: "Tip",
-  important: "Important",
-  warning: "Warning",
-  caution: "Caution"
-};
-
-function resolveRealFileInfo(uri) {
-  const fsPath = uri.fsPath;
-  let realPath = fsPath;
-  let isSymlink = false;
-  try {
-    const lstat = fs.lstatSync(fsPath);
-    if (lstat.isSymbolicLink()) {
-      isSymlink = true;
-      realPath = fs.realpathSync(fsPath);
-    } else {
-      realPath = fs.realpathSync(fsPath);
-    }
-  } catch (_) {
-    // ignore
+function getActiveWorkspaceFolder() {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders || folders.length === 0) return null;
+  const activeEditor = vscode.window.activeTextEditor;
+  if (activeEditor && activeEditor.document) {
+    const matched = vscode.workspace.getWorkspaceFolder(activeEditor.document.uri);
+    if (matched) return matched;
   }
-  const normalized = realPath.replace(/\\/g, "/");
-  const match = normalized.match(BRAIN_UUID_RE);
-  const cascadeId = match ? match[1] : null;
-  return {
-    fsPath,
-    realPath,
-    isSymlink,
-    cascadeId,
-    isBrainArtifact: Boolean(cascadeId)
-  };
+  return folders[0];
 }
 
-function preprocessCarousels(markdownText) {
-  return String(markdownText || "").replace(
-    /`{3,}carousel\s*\n([\s\S]*?)`{3,}/gi,
-    (_, inner) => {
-      const slides = inner
-        .split(/<!--\s*slide\s*-->/i)
-        .map((s) => s.trim())
-        .filter(Boolean);
-      if (!slides.length) return _;
-      const slidesHtml = slides
-        .map(
-          (slideMd, i) =>
-            `<div class="agy-carousel-slide${i === 0 ? " active" : ""}">\n\n${slideMd}\n\n</div>`
-        )
-        .join("\n");
-      return (
-        `<div class="agy-carousel">` +
-        `<div class="agy-carousel-header">` +
-        `<span class="agy-carousel-counter">Slide 1 of ${slides.length}</span>` +
-        `<div class="agy-carousel-controls">` +
-        `<button type="button" class="agy-btn agy-carousel-prev">← Prev</button>` +
-        `<button type="button" class="agy-btn agy-carousel-next">Next →</button>` +
-        `</div>` +
-        `</div>` +
-        `${slidesHtml}` +
-        `</div>\n`
-      );
-    }
-  );
-}
-
-function postprocessAlertsInHtml(html) {
-  return String(html || "").replace(
-    /<blockquote>\s*<p>\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?:\s*<br\s*\/?>|\s*\n|\s+)?([\s\S]*?)<\/blockquote>/gi,
-    (_, rawType, innerRest) => {
-      const type = rawType.toLowerCase();
-      const icon = ALERT_ICONS[type] || "";
-      const label = ALERT_LABELS[type] || rawType;
-      const body = innerRest.trim().startsWith("</p>")
-        ? innerRest.trim().slice(4)
-        : `<p>${innerRest}`;
-      return (
-        `<div class="markdown-alert markdown-alert-${type}">` +
-        `<p class="markdown-alert-title">${icon}${label}</p>` +
-        `${body}` +
-        `</div>`
-      );
-    }
-  );
-}
-
-class AntigravityMarkdownReviewProvider {
-  constructor(context) {
-    this.context = context;
+function resolveSyncScriptPath(context) {
+  const home = os.homedir();
+  const candidates = [
+    path.join(home, ".gemini", "config", "skills", "agy-project-hub", "scripts", "sync_local_notes.py"),
+    path.resolve(context.extensionPath, "..", "scripts", "sync_local_notes.py"),
+    path.join(context.extensionPath, "scripts", "sync_local_notes.py")
+  ];
+  const wf = getActiveWorkspaceFolder();
+  if (wf) {
+    candidates.push(path.join(wf.uri.fsPath, "scripts", "sync_local_notes.py"));
   }
-
-  async openCustomDocument(uri) {
-    return {
-      uri,
-      dispose: () => {}
-    };
-  }
-
-  async resolveCustomEditor(document, webviewPanel) {
-    const webview = webviewPanel.webview;
-    const info = resolveRealFileInfo(document.uri);
-    const localRoots = [
-      vscode.Uri.joinPath(this.context.extensionUri, "media"),
-      vscode.Uri.file(path.dirname(info.fsPath)),
-      vscode.Uri.file(path.dirname(info.realPath)),
-      vscode.Uri.file(os.homedir())
-    ];
-    if (vscode.workspace.workspaceFolders) {
-      for (const wf of vscode.workspace.workspaceFolders) {
-        localRoots.push(wf.uri);
-      }
-    }
-
-    webview.options = {
-      enableScripts: true,
-      localResourceRoots: localRoots
-    };
-
-    const renderToWebview = async () => {
-      let rawText = "";
-      try {
-        rawText = fs.readFileSync(info.realPath, "utf8");
-      } catch (err) {
-        try {
-          rawText = fs.readFileSync(info.fsPath, "utf8");
-        } catch (err2) {
-          rawText = `# Unable to read file\n\n\`${info.fsPath}\``;
-        }
-      }
-
-      const prepped = preprocessCarousels(rawText);
-      let renderedHtml = "";
-      try {
-        renderedHtml = await vscode.commands.executeCommand("markdown.api.render", prepped);
-      } catch (_) {
-        renderedHtml = `<pre>${escapeHtml(rawText)}</pre>`;
-      }
-
-      renderedHtml = postprocessAlertsInHtml(renderedHtml);
-      renderedHtml = rewriteLocalImageUris(renderedHtml, webview, path.dirname(info.realPath));
-
-      const cssUri = webview.asWebviewUri(
-        vscode.Uri.joinPath(this.context.extensionUri, "media", "antigravity-markdown.css")
-      );
-      const jsUri = webview.asWebviewUri(
-        vscode.Uri.joinPath(this.context.extensionUri, "media", "antigravity-markdown.js")
-      );
-
-      const displayPath = info.isSymlink
-        ? `${path.basename(info.fsPath)} → ${shortenHome(info.realPath)}`
-        : shortenHome(info.fsPath);
-
-      webview.html = buildWebviewHtml({
-        cssUri,
-        jsUri,
-        renderedHtml,
-        displayPath,
-        isBrainArtifact: info.isBrainArtifact,
-        isSymlink: info.isSymlink
-      });
-    };
-
-    await renderToWebview();
-
-    const disposables = [];
-
-    // Watch text document changes in VS Code
-    disposables.push(
-      vscode.workspace.onDidChangeTextDocument((e) => {
-        if (
-          e.document.uri.fsPath === info.fsPath ||
-          e.document.uri.fsPath === info.realPath
-        ) {
-          renderToWebview();
-        }
-      })
-    );
-
-    // Watch underlying file on disk (including symlink target in brain)
-    const watchedPaths = new Set([info.fsPath, info.realPath]);
-    for (const wp of watchedPaths) {
-      try {
-        if (fs.existsSync(wp)) {
-          const watcher = fs.watch(wp, { persistent: false }, () => {
-            renderToWebview();
-          });
-          disposables.push({ dispose: () => watcher.close() });
-        }
-      } catch (_) {
-        // ignore watcher errors
-      }
-    }
-
-    // Handle toolbar & link clicks from webview
-    disposables.push(
-      webview.onDidReceiveMessage(async (msg) => {
-        if (!msg || !msg.type) return;
-        if (msg.type === "editSource") {
-          await vscode.commands.executeCommand(
-            "vscode.openWith",
-            document.uri,
-            "default",
-            msg.beside ? vscode.ViewColumn.Beside : webviewPanel.viewColumn
-          );
-        } else if (msg.type === "openNativeArtifact") {
-          await openInNativeArtifactViewer(info);
-        } else if (msg.type === "copyRaw") {
-          try {
-            const raw = fs.readFileSync(info.realPath, "utf8");
-            await vscode.env.clipboard.writeText(raw);
-            vscode.window.setStatusBarMessage("Antigravity: Copied raw Markdown to clipboard", 2500);
-          } catch (_) {}
-        } else if (msg.type === "openLink") {
-          await handleWebviewLinkClick(msg.href, info);
-        }
-      })
-    );
-
-    webviewPanel.onDidDispose(() => {
-      for (const d of disposables) {
-        try {
-          d.dispose();
-        } catch (_) {}
-      }
-    });
-  }
-}
-
-async function openInNativeArtifactViewer(info) {
-  let targetUri = vscode.Uri.file(info.realPath);
-  if (info.cascadeId) {
-    targetUri = targetUri.with({ query: `cascadeId=${info.cascadeId}` });
-  }
-  try {
-    await vscode.commands.executeCommand("vscode.openWith", targetUri, "antigravity.artifactEditor");
-  } catch (_) {
-    vscode.window.showInformationMessage("Native Antigravity Artifact Viewer is not available for this file.");
-  }
-}
-
-async function handleWebviewLinkClick(href, currentInfo) {
-  if (!href) return;
-
-  if (href.startsWith("conversation://")) {
-    const convId = href.replace(/^conversation:\/\//i, "").trim().replace(/\/$/, "");
+  for (const cand of candidates) {
     try {
-      await vscode.commands.executeCommand("antigravity.openConversation", convId);
+      if (fs.existsSync(cand)) return cand;
+    } catch (_) {}
+  }
+  return candidates[0];
+}
+
+function getPythonCommand() {
+  try {
+    const cfg = vscode.workspace.getConfiguration("agyProjectHub");
+    const custom = cfg.get("pythonPath");
+    if (custom && String(custom).trim()) return String(custom).trim();
+  } catch (_) {}
+  return process.platform === "win32" ? "python" : "python3";
+}
+
+function runTelemetryScan(context, { syncHubs = true } = {}) {
+  return new Promise((resolve) => {
+    const wf = getActiveWorkspaceFolder();
+    if (!wf) {
+      resolve(null);
       return;
-    } catch (_) {
-      // Fallback: open that conversation's brain directory or PROJECT_HUB.md if present
-      const candidates = [
-        path.join(os.homedir(), ".gemini", "antigravity-cli", "brain", convId, "PROJECT_HUB.md"),
-        path.join(os.homedir(), ".gemini", "antigravity", "brain", convId, "PROJECT_HUB.md")
-      ];
-      for (const c of candidates) {
-        if (fs.existsSync(c)) {
-          await vscode.commands.executeCommand("vscode.open", vscode.Uri.file(c));
+    }
+    const scriptPath = resolveSyncScriptPath(context);
+    if (!fs.existsSync(scriptPath)) {
+      resolve(null);
+      return;
+    }
+
+    const pyCmd = getPythonCommand();
+    const args = [scriptPath, "--workspace", wf.uri.fsPath, "--dump-json"];
+    if (!syncHubs) {
+      args.push("--no-sync");
+    }
+
+    cp.execFile(
+      pyCmd,
+      args,
+      {
+        cwd: wf.uri.fsPath,
+        timeout: 15000,
+        maxBuffer: 16 * 1024 * 1024
+      },
+      (err, stdout) => {
+        if (err || !stdout) {
+          resolve(null);
           return;
         }
+        try {
+          const parsed = JSON.parse(String(stdout).trim());
+          resolve(parsed);
+        } catch (_) {
+          resolve(null);
+        }
       }
+    );
+  });
+}
+
+async function refreshTelemetry(context, { syncHubs = true, selectSessionId = "" } = {}) {
+  if (isFetching) {
+    pendingFetch = true;
+    return currentPayload;
+  }
+  isFetching = true;
+  try {
+    const payload = await runTelemetryScan(context, { syncHubs });
+    if (payload) {
+      currentPayload = payload;
+      updateStatusBar(payload);
+      if (sessionsProvider) sessionsProvider.refresh();
+      if (artifactsProvider) artifactsProvider.refresh();
+      if (dashboardPanel) {
+        dashboardPanel.webview.postMessage({
+          type: "updatePayload",
+          payload,
+          selectSessionId: selectSessionId || undefined
+        });
+      }
+    }
+    return payload;
+  } finally {
+    isFetching = false;
+    if (pendingFetch) {
+      pendingFetch = false;
+      refreshTelemetry(context, { syncHubs: false });
+    }
+  }
+}
+
+function updateStatusBar(payload) {
+  if (!statusBarItem) return;
+  if (!payload || !Array.isArray(payload.sessions) || payload.sessions.length === 0) {
+    statusBarItem.text = "$(graph) Agy Hub";
+    statusBarItem.backgroundColor = undefined;
+    statusBarItem.tooltip = "Open Antigravity Project Hub Visual Dashboard";
+    statusBarItem.show();
+    return;
+  }
+
+  const sessions = payload.sessions;
+  const active =
+    sessions.find((s) => s.id === payload.activeSessionId) || sessions[0];
+  const curTok = active.currentCtxTokens || 0;
+  const pct256 = Math.min(100, Math.round((curTok / 256000) * 100));
+  const cmpBadge = active.compactionCount > 0 ? ` · ${active.compactionCount}x cmp` : "";
+  const lineageTag = active.parentId
+    ? `Fork @${active.forkStep ?? "?"}`
+    : `Tree #${active.treeNum || 1}`;
+
+  let icon = "$(Pass)";
+  if (curTok >= 185000) {
+    icon = "$(warning)";
+    statusBarItem.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground");
+  } else if (curTok >= 145000) {
+    icon = "$(info)";
+    statusBarItem.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
+  } else {
+    icon = "$(zap)";
+    statusBarItem.backgroundColor = undefined;
+  }
+
+  statusBarItem.text = `${icon} Ctx: ${active.currentCtxFormatted} (${pct256}%)${cmpBadge} · ${lineageTag}`;
+
+  const md = new vscode.MarkdownString("", true);
+  md.isTrusted = true;
+  md.appendMarkdown(`### ⚡ Antigravity Project Hub — \`${payload.workspace?.name || ""}\`\n\n`);
+  md.appendMarkdown(
+    `- **Active Session (${(active.source || "cli").toUpperCase()}):** \`${active.id}\` (*${active.title}*)\n`
+  );
+  md.appendMarkdown(
+    `- **Context Usage:** **\`${active.currentCtxFormatted}\`** active / \`${active.peakCtxFormatted}\` peak (\`${pct256}%\` of \`256k\` ceiling${cmpBadge})\n`
+  );
+  md.appendMarkdown(
+    `- **Workspace Totals:** \`${payload.kpis?.primarySessionCount || 0}\` sessions (\`${payload.kpis?.rootTreeCount || 0}\` trees, \`${payload.kpis?.forkCount || 0}\` forks) · \`${payload.kpis?.totalChats || 0}\` chats · \`${payload.kpis?.totalOutputFormatted || "0"}\` out\n`
+  );
+  md.appendMarkdown(
+    `- **Git Branch:** \`${payload.git?.currentBranch || "detached"}\` (${payload.git?.clean ? "Clean" : "Uncommitted changes"})\n\n`
+  );
+  md.appendMarkdown(
+    `[📊 Open Visual Dashboard](command:agyProjectHub.openDashboard) · [📄 Open PROJECT_HUB.md](command:agyProjectHub.openHubMarkdown) · [↻ Sync Now](command:agyProjectHub.refresh)`
+  );
+  statusBarItem.tooltip = md;
+  statusBarItem.show();
+}
+
+function inspectGitCommit(sha) {
+  return new Promise((resolve) => {
+    const wf = getActiveWorkspaceFolder();
+    if (!wf || !sha || !/^[0-9a-fA-F]{4,40}$/.test(String(sha))) {
+      resolve(null);
       return;
     }
-  }
-
-  if (/^https?:\/\//i.test(href) || /^mailto:/i.test(href)) {
-    await vscode.env.openExternal(vscode.Uri.parse(href));
-    return;
-  }
-
-  // Handle file:// or relative file paths with optional #L10-L20 line fragments
-  let rawPath = href;
-  let fragment = "";
-  const hashIdx = rawPath.indexOf("#");
-  if (hashIdx !== -1) {
-    fragment = rawPath.slice(hashIdx + 1);
-    rawPath = rawPath.slice(0, hashIdx);
-  }
-
-  let targetFsPath = "";
-  if (rawPath.startsWith("file://")) {
-    try {
-      targetFsPath = vscode.Uri.parse(rawPath).fsPath;
-    } catch (_) {
-      targetFsPath = decodeURIComponent(rawPath.replace(/^file:\/\//i, ""));
-    }
-  } else if (rawPath) {
-    targetFsPath = path.resolve(path.dirname(currentInfo.realPath), decodeURIComponent(rawPath));
-  } else {
-    return;
-  }
-
-  if (!fs.existsSync(targetFsPath)) {
-    // Also try resolving relative to the shortcut's directory
-    const altPath = path.resolve(path.dirname(currentInfo.fsPath), decodeURIComponent(rawPath));
-    if (fs.existsSync(altPath)) {
-      targetFsPath = altPath;
-    }
-  }
-
-  const targetUri = vscode.Uri.file(targetFsPath);
-  const lineMatch = fragment.match(/^L(\d+)(?:-L?(\d+))?$/i);
-  if (lineMatch) {
-    const startLine = Math.max(0, parseInt(lineMatch[1], 10) - 1);
-    const endLine = lineMatch[2] ? Math.max(startLine, parseInt(lineMatch[2], 10) - 1) : startLine;
-    const doc = await vscode.workspace.openTextDocument(targetUri);
-    const editor = await vscode.window.showTextDocument(doc);
-    const range = new vscode.Range(startLine, 0, endLine, 999);
-    editor.selection = new vscode.Selection(range.start, range.end);
-    editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
-    return;
-  }
-
-  if (/\.(md|markdown)$/i.test(targetFsPath)) {
-    await vscode.commands.executeCommand("vscode.openWith", targetUri, "antigravity.markdownReview");
-  } else {
-    await vscode.commands.executeCommand("vscode.open", targetUri);
-  }
-}
-
-function rewriteLocalImageUris(html, webview, baseDir) {
-  return String(html || "").replace(
-    /(<img\b[^>]*?\bsrc=["'])([^"']+)(["'][^>]*>)/gi,
-    (full, prefix, src, suffix) => {
-      if (/^(?:https?:|data:|vscode-webview-resource:)/i.test(src)) {
-        return full;
-      }
-      let fsPath = src;
-      if (src.startsWith("file://")) {
-        try {
-          fsPath = vscode.Uri.parse(src).fsPath;
-        } catch (_) {
-          fsPath = decodeURIComponent(src.replace(/^file:\/\//i, ""));
+    const cwd = wf.uri.fsPath;
+    cp.execFile(
+      "git",
+      [
+        "show",
+        "--name-status",
+        "--date=format:%Y-%m-%d %H:%M",
+        "--pretty=format:META%x09%h%x09%H%x09%p%x09%an%x09%ad%x09%s",
+        String(sha)
+      ],
+      { cwd, timeout: 5000, maxBuffer: 2 * 1024 * 1024 },
+      (err, stdout) => {
+        if (err || !stdout) {
+          resolve(null);
+          return;
         }
-      } else {
-        fsPath = path.resolve(baseDir, decodeURIComponent(src));
+        const lines = String(stdout).split(/\r?\n/);
+        let meta = {
+          sha: String(sha),
+          fullSha: String(sha),
+          parents: [],
+          author: "",
+          date: "",
+          subject: "",
+          files: []
+        };
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          if (line.startsWith("META\t")) {
+            const parts = line.split("\t");
+            meta.sha = parts[1] || String(sha);
+            meta.fullSha = parts[2] || String(sha);
+            meta.parents = (parts[3] || "").split(" ").filter(Boolean);
+            meta.author = parts[4] || "";
+            meta.date = parts[5] || "";
+            meta.subject = parts.slice(6).join("\t") || "";
+          } else if (/^[ACDMRTUXB][0-9]*\t/.test(line)) {
+            const fparts = line.split("\t");
+            const statusCode = fparts[0][0];
+            const relPath = fparts[fparts.length - 1];
+            const badgeMap = {
+              M: "modified",
+              A: "added",
+              D: "deleted",
+              R: "renamed",
+              C: "copied"
+            };
+            meta.files.push({
+              rel: relPath,
+              abs: path.join(cwd, relPath),
+              status: statusCode,
+              badge: badgeMap[statusCode] || statusCode
+            });
+          }
+        }
+        resolve(meta);
       }
-      const webviewUri = webview.asWebviewUri(vscode.Uri.file(fsPath));
-      return `${prefix}${webviewUri}${suffix}`;
+    );
+  });
+}
+
+async function openFileSmart(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) {
+    vscode.window.showWarningMessage(`File not found: ${filePath}`);
+    return;
+  }
+  const uri = vscode.Uri.file(filePath);
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === ".md" || ext === ".markdown") {
+    try {
+      await vscode.commands.executeCommand("vscode.openWith", uri, "antigravity.markdownReview");
+      return;
+    } catch (_) {}
+  }
+  if (ext === ".html" || ext === ".pdf") {
+    try {
+      await vscode.env.openExternal(uri);
+      return;
+    } catch (_) {}
+  }
+  await vscode.window.showTextDocument(uri, { preview: false });
+}
+
+function resumeSessionInTerminal(sessionId) {
+  let sid = sessionId;
+  if (sid && typeof sid === "object" && sid.session) {
+    sid = sid.session.id;
+  }
+  if (!sid && currentPayload) {
+    sid = currentPayload.activeSessionId;
+  }
+  if (!sid) {
+    vscode.window.showInformationMessage("No Antigravity session ID selected.");
+    return;
+  }
+  const wf = getActiveWorkspaceFolder();
+  const cwd = wf ? wf.uri.fsPath : os.homedir();
+  const shortId = String(sid).slice(0, 8);
+  const termName = `agy · ${shortId}`;
+  let term = vscode.window.terminals.find((t) => t.name === termName);
+  if (!term) {
+    term = vscode.window.createTerminal({
+      name: termName,
+      cwd
+    });
+  }
+  term.show();
+  term.sendText(`agy --conversation ${sid}`, true);
+}
+
+class SessionsTreeProvider {
+  constructor() {
+    this._onDidChangeTreeData = new vscode.EventEmitter();
+    this.onDidChangeTreeData = this._onDidChangeTreeData.event;
+  }
+
+  refresh() {
+    this._onDidChangeTreeData.fire();
+  }
+
+  getTreeItem(element) {
+    return element;
+  }
+
+  getChildren(element) {
+    if (!currentPayload || !Array.isArray(currentPayload.sessions)) {
+      return [];
     }
+    const sessions = currentPayload.sessions;
+    if (!element) {
+      // Root level: Root sessions (no parentId and not subagent), or fallback all primary
+      const roots = sessions.filter((s) => !s.parentId && !s.isSubagent);
+      const list = roots.length > 0 ? roots : sessions.filter((s) => !s.isSubagent);
+      return list.map((s) => this._buildSessionItem(s, sessions));
+    }
+    if (element.session) {
+      const parentId = element.session.id;
+      const children = sessions.filter((s) => s.parentId === parentId);
+      return children.map((c) => this._buildSessionItem(c, sessions));
+    }
+    return [];
+  }
+
+  _buildSessionItem(s, allSessions) {
+    const hasChildren = allSessions.some((x) => x.parentId === s.id);
+    const isAct = s.id === currentPayload.activeSessionId;
+    let label = "";
+    if (s.isSubagent) {
+      const atStep = s.forkStep !== null && s.forkStep !== undefined ? ` @${s.forkStep}` : "";
+      label = `${s.agentName || "subagent"}${atStep} · ${s.shortId}`;
+    } else if (s.parentId) {
+      label = `Fork @#${s.forkStep ?? "?"} · ${s.shortId}`;
+    } else {
+      label = `Tree #${s.treeNum} · ${s.shortId}`;
+    }
+
+    const item = new vscode.TreeItem(
+      label,
+      hasChildren
+        ? vscode.TreeItemCollapsibleState.Expanded
+        : vscode.TreeItemCollapsibleState.None
+    );
+    item.session = s;
+    item.contextValue = s.isSubagent ? "sessionSubagent" : "session";
+
+    const cmpTag = s.compactionCount > 0 ? ` · ${s.compactionCount}x cmp` : "";
+    const pct256 = Math.min(100, Math.round(((s.currentCtxTokens || 0) / 256000) * 100));
+    item.description = `${s.currentCtxFormatted} (${pct256}%) · ${s.userChats} turns`;
+
+    if (s.isSubagent) {
+      item.iconPath = new vscode.ThemeIcon("hubot", new vscode.ThemeColor("charts.blue"));
+    } else if (isAct) {
+      item.iconPath = new vscode.ThemeIcon("zap", new vscode.ThemeColor("charts.blue"));
+    } else if (s.parentId) {
+      item.iconPath = new vscode.ThemeIcon("git-branch", new vscode.ThemeColor("charts.purple"));
+    } else if (s.currentCtxTokens >= 185000) {
+      item.iconPath = new vscode.ThemeIcon("flame", new vscode.ThemeColor("charts.orange"));
+    } else {
+      item.iconPath = new vscode.ThemeIcon("Pulse", new vscode.ThemeColor("charts.green"));
+    }
+
+    const md = new vscode.MarkdownString("", true);
+    md.appendMarkdown(`**${label}** — *${s.title}*\n\n`);
+    md.appendMarkdown(`- **UUID:** \`${s.id}\` (\`${(s.source || "cli").toUpperCase()}\`)\n`);
+    md.appendMarkdown(
+      `- **Context:** \`${s.currentCtxFormatted}\` active / \`${s.peakCtxFormatted}\` peak${cmpTag}\n`
+    );
+    md.appendMarkdown(
+      `- **Activity:** \`${s.userChats}\` chats · \`${s.stepSpan}\` steps (\`#${s.firstStep}..#${s.lastStep}\`) · \`${s.totalOutputFormatted}\` out\n`
+    );
+    md.appendMarkdown(`- **Window:** \`${s.startedLocal}\` → \`${s.lastActive}\`\n`);
+    item.tooltip = md;
+
+    item.command = {
+      command: "agyProjectHub.selectSessionInDashboard",
+      title: "Inspect Session in Visual Dashboard",
+      arguments: [s.id]
+    };
+
+    return item;
+  }
+}
+
+class ArtifactsTreeProvider {
+  constructor() {
+    this._onDidChangeTreeData = new vscode.EventEmitter();
+    this.onDidChangeTreeData = this._onDidChangeTreeData.event;
+  }
+
+  refresh() {
+    this._onDidChangeTreeData.fire();
+  }
+
+  getTreeItem(element) {
+    return element;
+  }
+
+  getChildren(element) {
+    if (!currentPayload) return [];
+    if (!element) {
+      const dashboardItem = new vscode.TreeItem(
+        "Open Visual Command Center",
+        vscode.TreeItemCollapsibleState.None
+      );
+      dashboardItem.iconPath = new vscode.ThemeIcon("graph", new vscode.ThemeColor("charts.blue"));
+      dashboardItem.description = "Interactive Charts & Forest";
+      dashboardItem.command = {
+        command: "agyProjectHub.openDashboard",
+        title: "Open Visual Dashboard"
+      };
+
+      const hubMdItem = new vscode.TreeItem(
+        "PROJECT_HUB.md",
+        vscode.TreeItemCollapsibleState.None
+      );
+      hubMdItem.iconPath = new vscode.ThemeIcon("markdown", new vscode.ThemeColor("charts.green"));
+      hubMdItem.description = ".local-notes/PROJECT_HUB.md";
+      hubMdItem.command = {
+        command: "agyProjectHub.openHubMarkdown",
+        title: "Open PROJECT_HUB.md"
+      };
+
+      const docsGroup = new vscode.TreeItem(
+        `Synced Knowledge Base (${(currentPayload.artifacts || []).length})`,
+        vscode.TreeItemCollapsibleState.Expanded
+      );
+      docsGroup.groupKind = "docs";
+      docsGroup.iconPath = new vscode.ThemeIcon("book");
+
+      const gitDirtyCount =
+        (currentPayload.git?.modified || 0) +
+        (currentPayload.git?.added || 0) +
+        (currentPayload.git?.deleted || 0) +
+        (currentPayload.git?.untracked || 0);
+      const gitGroup = new vscode.TreeItem(
+        `Git Working Tree (${gitDirtyCount ? `${gitDirtyCount} dirty` : "Clean"})`,
+        vscode.TreeItemCollapsibleState.Collapsed
+      );
+      gitGroup.groupKind = "git";
+      gitGroup.iconPath = new vscode.ThemeIcon("source-control");
+
+      const gitCommitsGroup = new vscode.TreeItem(
+        `Git Branches & Commit Graph (${(currentPayload.git?.branches || []).length} branches)`,
+        vscode.TreeItemCollapsibleState.Expanded
+      );
+      gitCommitsGroup.groupKind = "gitGraph";
+      gitCommitsGroup.iconPath = new vscode.ThemeIcon("git-merge", new vscode.ThemeColor("charts.purple"));
+
+      const hotGroup = new vscode.TreeItem(
+        `Recently Touched Code (${(currentPayload.hotFiles || []).length})`,
+        vscode.TreeItemCollapsibleState.Collapsed
+      );
+      hotGroup.groupKind = "hot";
+      hotGroup.iconPath = new vscode.ThemeIcon("flame");
+
+      return [dashboardItem, hubMdItem, gitCommitsGroup, docsGroup, gitGroup, hotGroup];
+    }
+
+    if (element.groupKind === "gitGraph") {
+      const branchItems = (currentPayload.git?.branches || []).map((b) => {
+        const it = new vscode.TreeItem(
+          `${b.name}${b.active ? " (HEAD)" : ""}`,
+          vscode.TreeItemCollapsibleState.None
+        );
+        it.description = `${b.sha} · ${b.subject}`;
+        it.iconPath = new vscode.ThemeIcon(
+          "git-branch",
+          b.active ? new vscode.ThemeColor("charts.green") : new vscode.ThemeColor("charts.purple")
+        );
+        it.command = {
+          command: "agyProjectHub.openDashboard",
+          title: "Open Git Graph in Dashboard"
+        };
+        return it;
+      });
+      const commitItems = (currentPayload.git?.graphCommits || currentPayload.git?.commits || [])
+        .filter((c) => c.subject || c.refs)
+        .slice(0, 10)
+        .map((c) => {
+          const it = new vscode.TreeItem(c.subject || c.sha, vscode.TreeItemCollapsibleState.None);
+          it.description = `${c.sha} · ${String(c.date || "").slice(5)}`;
+          it.iconPath = new vscode.ThemeIcon("git-commit");
+          it.command = {
+            command: "agyProjectHub.openDashboard",
+            title: "Inspect Commit in Dashboard"
+          };
+          return it;
+        });
+      return [...branchItems, ...commitItems];
+    }
+
+    if (element.groupKind === "docs") {
+      const docs = (currentPayload.artifacts || []).map((d) => {
+        const it = new vscode.TreeItem(d.name, vscode.TreeItemCollapsibleState.None);
+        it.description = `${d.category.replace(/^[^\w]+/, "")} · ${d.lineCount}L · ${(d.originSid || "").slice(0, 8)}`;
+        it.tooltip = `${d.title}\n\n${d.summary}`;
+        it.iconPath = new vscode.ThemeIcon("file-text");
+        it.command = {
+          command: "agyProjectHub.openArtifact",
+          title: "Open Artifact",
+          arguments: [d.localPath]
+        };
+        return it;
+      });
+      const media = (currentPayload.richMedia || []).map((m) => {
+        const it = new vscode.TreeItem(m.name, vscode.TreeItemCollapsibleState.None);
+        it.description = `${m.sizeStr} · ${m.updatedLocal}`;
+        it.iconPath = new vscode.ThemeIcon("globe");
+        it.command = {
+          command: "agyProjectHub.openArtifact",
+          title: "Open Media",
+          arguments: [m.path]
+        };
+        return it;
+      });
+      return [...docs, ...media];
+    }
+
+    if (element.groupKind === "git") {
+      return (currentPayload.git?.changedFiles || []).map((f) => {
+        const it = new vscode.TreeItem(f.rel, vscode.TreeItemCollapsibleState.None);
+        it.description = f.badge;
+        it.iconPath = new vscode.ThemeIcon("diff");
+        it.command = {
+          command: "agyProjectHub.openArtifact",
+          title: "Open File",
+          arguments: [f.abs]
+        };
+        return it;
+      });
+    }
+
+    if (element.groupKind === "hot") {
+      return (currentPayload.hotFiles || []).map((h) => {
+        const it = new vscode.TreeItem(h.rel, vscode.TreeItemCollapsibleState.None);
+        it.description = `${h.tsLocal} · ${(h.sessionId || "").slice(0, 8)}`;
+        it.iconPath = new vscode.ThemeIcon("edit");
+        it.command = {
+          command: "agyProjectHub.openArtifact",
+          title: "Open File",
+          arguments: [h.abs]
+        };
+        return it;
+      });
+    }
+
+    return [];
+  }
+}
+
+function buildDashboardWebviewHtml(webview, context, initialPayload) {
+  const cssUri = webview.asWebviewUri(
+    vscode.Uri.file(path.join(context.extensionPath, "media", "dashboard.css"))
   );
-}
-
-function shortenHome(p) {
-  const home = os.homedir();
-  return p.startsWith(home) ? "~" + p.slice(home.length) : p;
-}
-
-function escapeHtml(s) {
-  return String(s || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
-function buildWebviewHtml({ cssUri, jsUri, renderedHtml, displayPath, isBrainArtifact, isSymlink }) {
-  const brainBadge = isBrainArtifact
-    ? `<span class="agy-badge agy-badge-brain" title="Synced with Antigravity Brain">${isSymlink ? "Brain Shortcut" : "Brain Artifact"}</span>`
-    : "";
-  const nativeBtn = isBrainArtifact
-    ? `<button type="button" class="agy-btn" id="btn-native" title="Open in Native Antigravity Artifact Viewer">Native Viewer ↗</button>`
-    : "";
+  const jsUri = webview.asWebviewUri(
+    vscode.Uri.file(path.join(context.extensionPath, "media", "dashboard.js"))
+  );
+  const safeJson = JSON.stringify(initialPayload || null).replace(/</g, "\\u003c");
 
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Antigravity Project Hub</title>
   <link rel="stylesheet" href="${cssUri}" />
-  <title>Antigravity Markdown Review</title>
 </head>
-<body class="agy-review-body vscode-dark">
-  <div class="agy-toolbar">
-    <div class="agy-toolbar-left">
-      <span class="agy-badge">✦ Antigravity Review</span>
-      ${brainBadge}
-      <span class="agy-filepath" title="${escapeHtml(displayPath)}">${escapeHtml(displayPath)}</span>
-    </div>
-    <div class="agy-toolbar-actions">
-      ${nativeBtn}
-      <button type="button" class="agy-btn" id="btn-copy" title="Copy raw Markdown">Copy MD</button>
-      <button type="button" class="agy-btn" id="btn-split" title="Open raw Markdown beside this review">Split Edit</button>
-      <button type="button" class="agy-btn" id="btn-edit" title="Switch to raw Markdown editor">Edit Raw</button>
-    </div>
-  </div>
-  <main class="agy-review-container" id="agy-content">
-    ${renderedHtml}
-  </main>
+<body>
+  <div id="app"></div>
+  <div id="hub-toast" class="hub-toast"></div>
+  <script>window.__INITIAL_PAYLOAD__ = ${safeJson};</script>
   <script src="${jsUri}"></script>
-  <script>
-    (function() {
-      const vscode = acquireVsCodeApi();
-      const btnEdit = document.getElementById("btn-edit");
-      const btnSplit = document.getElementById("btn-split");
-      const btnCopy = document.getElementById("btn-copy");
-      const btnNative = document.getElementById("btn-native");
-
-      if (btnEdit) btnEdit.addEventListener("click", () => vscode.postMessage({ type: "editSource", beside: false }));
-      if (btnSplit) btnSplit.addEventListener("click", () => vscode.postMessage({ type: "editSource", beside: true }));
-      if (btnCopy) btnCopy.addEventListener("click", () => vscode.postMessage({ type: "copyRaw" }));
-      if (btnNative) btnNative.addEventListener("click", () => vscode.postMessage({ type: "openNativeArtifact" }));
-
-      document.addEventListener("click", (e) => {
-        const a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
-        if (!a) return;
-        const href = a.getAttribute("href") || "";
-        if (!href) return;
-        if (href.startsWith("#")) {
-          const target = document.getElementById(href.slice(1));
-          if (target) {
-            e.preventDefault();
-            target.scrollIntoView({ behavior: "smooth" });
-          }
-          return;
-        }
-        e.preventDefault();
-        vscode.postMessage({ type: "openLink", href });
-      });
-    })();
-  </script>
 </body>
 </html>`;
 }
 
-function syncMarkdownPreviewEnhanced(extensionPath) {
-  try {
-    const crossnoteDir = path.join(os.homedir(), ".local", "state", "crossnote");
-    fs.mkdirSync(crossnoteDir, { recursive: true });
-
-    const cssSource = fs.readFileSync(
-      path.join(extensionPath, "media", "antigravity-markdown.css"),
-      "utf8"
-    );
-
-    const styleLessPath = path.join(crossnoteDir, "style.less");
-    const beginMarker = "/* BEGIN ANTIGRAVITY MARKDOWN STYLE */";
-    const endMarker = "/* END ANTIGRAVITY MARKDOWN STYLE */";
-    const styleBlock = `${beginMarker}\n${cssSource}\n${endMarker}`;
-
-    let existingStyle = "";
-    if (fs.existsSync(styleLessPath)) {
-      existingStyle = fs.readFileSync(styleLessPath, "utf8");
-    }
-    if (existingStyle.includes(beginMarker) && existingStyle.includes(endMarker)) {
-      const startIdx = existingStyle.indexOf(beginMarker);
-      const endIdx = existingStyle.indexOf(endMarker) + endMarker.length;
-      existingStyle = existingStyle.slice(0, startIdx) + styleBlock + existingStyle.slice(endIdx);
-    } else {
-      existingStyle = existingStyle.trimEnd() + "\n\n" + styleBlock + "\n";
-    }
-    fs.writeFileSync(styleLessPath, existingStyle, "utf8");
-
-    // Also configure Crossnote parser.js so [!NOTE]/[!TIP]/[!IMPORTANT]/[!WARNING]/[!CAUTION]
-    // and ```carousel blocks render in Markdown Preview Enhanced
-    const parserJsPath = path.join(crossnoteDir, "parser.js");
-    const parserCode = `({
-  // Managed by Antigravity Markdown Review (iamqazolp.agy-markdown-review)
-  onWillParseMarkdown: async function(markdown) {
-    return String(markdown || "").replace(
-      /\`{3,}carousel\\s*\\n([\\s\\S]*?)\`{3,}/gi,
-      function(_, inner) {
-        const slides = inner.split(/<!--\\s*slide\\s*-->/i).map(s => s.trim()).filter(Boolean);
-        if (!slides.length) return _;
-        return '<div class="agy-carousel">' +
-          '<div class="agy-carousel-header"><span class="agy-carousel-counter">Carousel (' + slides.length + ' slides)</span></div>' +
-          slides.map((s) => '<div class="agy-carousel-slide active">\\n\\n' + s + '\\n\\n</div>').join("\\n") +
-          '</div>\\n';
-      }
-    );
-  },
-
-  onDidParseMarkdown: async function(html) {
-    const icons = ${JSON.stringify(ALERT_ICONS)};
-    const labels = ${JSON.stringify(ALERT_LABELS)};
-    let out = String(html || "").replace(
-      /<blockquote>\\s*<p>\\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\\](?:\\s*<br\\s*\\/?>|\\s*\\n|\\s+)?([\\s\\S]*?)<\\/blockquote>/gi,
-      function(_, rawType, rest) {
-        const t = rawType.toLowerCase();
-        const body = rest.trim().startsWith("</p>") ? rest.trim().slice(4) : "<p>" + rest;
-        return '<div class="markdown-alert markdown-alert-' + t + '">' +
-          '<p class="markdown-alert-title">' + (icons[t] || "") + (labels[t] || rawType) + '</p>' +
-          body + '</div>';
-      }
-    );
-    out = out.replace(/<table(\\b[^>]*)>/gi, '<div class="agy-table-wrapper"><table$1>');
-    out = out.replace(/<\\/table>/gi, '</table></div>');
-    return out;
-  },
-})
-`;
-    fs.writeFileSync(parserJsPath, parserCode, "utf8");
-  } catch (_) {
-    // Ignore errors if crossnote dir is not writable
+async function openDashboardWebview(context, selectSessionId = "") {
+  if (!currentPayload) {
+    await refreshTelemetry(context, { syncHubs: true });
   }
+  if (dashboardPanel) {
+    dashboardPanel.reveal(vscode.ViewColumn.One);
+    if (currentPayload) {
+      dashboardPanel.webview.postMessage({
+        type: "updatePayload",
+        payload: currentPayload,
+        selectSessionId: selectSessionId || undefined
+      });
+    }
+    return;
+  }
+
+  const wsName = currentPayload?.workspace?.name || "Workspace";
+  dashboardPanel = vscode.window.createWebviewPanel(
+    "agyProjectHub.dashboard",
+    `${wsName} — Project Hub`,
+    vscode.ViewColumn.One,
+    {
+      enableScripts: true,
+      retainContextWhenHidden: true,
+      localResourceRoots: [vscode.Uri.file(path.join(context.extensionPath, "media"))]
+    }
+  );
+
+  if (selectSessionId && currentPayload) {
+    currentPayload = { ...currentPayload };
+  }
+  dashboardPanel.webview.html = buildDashboardWebviewHtml(
+    dashboardPanel.webview,
+    context,
+    currentPayload
+  );
+  if (selectSessionId) {
+    setTimeout(() => {
+      if (dashboardPanel) {
+        dashboardPanel.webview.postMessage({
+          type: "selectSession",
+          sessionId: selectSessionId
+        });
+      }
+    }, 80);
+  }
+
+  dashboardPanel.webview.onDidReceiveMessage(async (msg) => {
+    if (!msg) return;
+    if (msg.type === "refresh") {
+      await refreshTelemetry(context, { syncHubs: true });
+    } else if (msg.type === "openHubMarkdown") {
+      vscode.commands.executeCommand("agyProjectHub.openHubMarkdown");
+    } else if (msg.type === "resumeInCli" && msg.sessionId) {
+      resumeSessionInTerminal(msg.sessionId);
+    } else if (msg.type === "copyText" && msg.text) {
+      await vscode.env.clipboard.writeText(String(msg.text));
+    } else if (msg.type === "openFile" && msg.path) {
+      await openFileSmart(msg.path);
+    } else if (msg.type === "inspectCommit" && msg.sha) {
+      const details = await inspectGitCommit(msg.sha);
+      if (details && dashboardPanel) {
+        dashboardPanel.webview.postMessage({
+          type: "commitDetails",
+          details
+        });
+      }
+    }
+  });
+
+  dashboardPanel.onDidDispose(() => {
+    dashboardPanel = null;
+  });
 }
 
-function extendMarkdownItWithAntigravity(md) {
-  const defaultFence =
-    md.renderer.rules.fence ||
-    function (tokens, idx, options, env, self) {
-      return self.renderToken(tokens, idx, options);
-    };
-
-  md.renderer.rules.fence = function (tokens, idx, options, env, self) {
-    const token = tokens[idx];
-    const info = (token.info || "").trim().toLowerCase();
-    if (info === "carousel") {
-      const slides = (token.content || "")
-        .split(/<!--\s*slide\s*-->/i)
-        .map((s) => s.trim())
-        .filter(Boolean);
-      if (slides.length) {
-        const slidesHtml = slides
-          .map(
-            (s, i) =>
-              `<div class="agy-carousel-slide${i === 0 ? " active" : ""}">${md.render(s)}</div>`
-          )
-          .join("");
-        return (
-          `<div class="agy-carousel">` +
-          `<div class="agy-carousel-header">` +
-          `<span class="agy-carousel-counter">Slide 1 of ${slides.length}</span>` +
-          `<div class="agy-carousel-controls">` +
-          `<button type="button" class="agy-btn agy-carousel-prev">← Prev</button>` +
-          `<button type="button" class="agy-btn agy-carousel-next">Next →</button>` +
-          `</div>` +
-          `</div>` +
-          `${slidesHtml}` +
-          `</div>`
-        );
-      }
-    }
-    return defaultFence(tokens, idx, options, env, self);
+function setupBackgroundWatchers(context) {
+  const scheduleRefresh = (syncHubs = false) => {
+    const autoSync = vscode.workspace
+      .getConfiguration("agyProjectHub")
+      .get("autoSync", true);
+    if (!autoSync) return;
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      refreshTelemetry(context, { syncHubs });
+    }, 2200);
   };
 
-  return md;
+  // Watch ~/.gemini/antigravity-cli/brain and ~/.gemini/antigravity/brain
+  const home = os.homedir();
+  const brainRoots = [
+    path.join(home, ".gemini", "antigravity-cli", "brain"),
+    path.join(home, ".gemini", "antigravity", "brain")
+  ];
+  for (const bRoot of brainRoots) {
+    try {
+      if (fs.existsSync(bRoot)) {
+        const w = fs.watch(bRoot, { recursive: true }, (_eventType, filename) => {
+          if (!filename) return;
+          const low = String(filename).toLowerCase();
+          if (low.endsWith("project_hub.md") || low.endsWith(".metadata.json")) {
+            return;
+          }
+          if (low.endsWith("transcript.jsonl") || low.endsWith(".md") || low.endsWith(".html")) {
+            scheduleRefresh(true);
+          }
+        });
+        fsWatchers.push(w);
+      }
+    } catch (_) {}
+  }
+
+  // Watch active workspace .git changes
+  const wf = getActiveWorkspaceFolder();
+  if (wf) {
+    const gitWatcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(wf, ".git/{HEAD,index,refs/**}")
+    );
+    gitWatcher.onDidChange(() => scheduleRefresh(false));
+    gitWatcher.onDidCreate(() => scheduleRefresh(false));
+    context.subscriptions.push(gitWatcher);
+  }
 }
 
 function activate(context) {
-  const provider = new AntigravityMarkdownReviewProvider(context);
+  statusBarItem = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Left,
+    98
+  );
+  statusBarItem.command = "agyProjectHub.openDashboard";
+  statusBarItem.text = "$(zap) Agy Hub";
+  context.subscriptions.push(statusBarItem);
+
+  sessionsProvider = new SessionsTreeProvider();
+  artifactsProvider = new ArtifactsTreeProvider();
 
   context.subscriptions.push(
-    vscode.window.registerCustomEditorProvider("antigravity.markdownReview", provider, {
-      webviewOptions: { retainContextWhenHidden: true },
-      supportsMultipleEditorsPerDocument: true
-    })
+    vscode.window.registerTreeDataProvider("agyProjectHub.sessionsView", sessionsProvider),
+    vscode.window.registerTreeDataProvider("agyProjectHub.artifactsView", artifactsProvider)
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("agyMarkdown.openReview", async (uri) => {
-      const targetUri =
-        uri instanceof vscode.Uri
-          ? uri
-          : vscode.window.activeTextEditor
-          ? vscode.window.activeTextEditor.document.uri
-          : null;
-      if (!targetUri) return;
-      await vscode.commands.executeCommand("vscode.openWith", targetUri, "antigravity.markdownReview");
+    vscode.commands.registerCommand("agyProjectHub.openDashboard", () =>
+      openDashboardWebview(context)
+    ),
+    vscode.commands.registerCommand(
+      "agyProjectHub.selectSessionInDashboard",
+      (sessionId) => openDashboardWebview(context, sessionId)
+    ),
+    vscode.commands.registerCommand("agyProjectHub.refresh", async () => {
+      await refreshTelemetry(context, { syncHubs: true });
+      vscode.window.setStatusBarMessage("$(check) Antigravity Project Hub synced", 2500);
     }),
-    vscode.commands.registerCommand("agyMarkdown.openReviewBeside", async (uri) => {
-      const targetUri =
-        uri instanceof vscode.Uri
-          ? uri
-          : vscode.window.activeTextEditor
-          ? vscode.window.activeTextEditor.document.uri
-          : null;
-      if (!targetUri) return;
-      await vscode.commands.executeCommand(
-        "vscode.openWith",
-        targetUri,
-        "antigravity.markdownReview",
-        vscode.ViewColumn.Beside
-      );
-    }),
-    vscode.commands.registerCommand("agyMarkdown.editSource", async (uri) => {
-      let targetUri = uri instanceof vscode.Uri ? uri : null;
-      if (!targetUri && vscode.window.tabGroups.activeTabGroup.activeTab) {
-        const input = vscode.window.tabGroups.activeTabGroup.activeTab.input;
-        if (input && input.uri) {
-          targetUri = input.uri;
+    vscode.commands.registerCommand("agyProjectHub.openHubMarkdown", async () => {
+      if (!currentPayload) {
+        await refreshTelemetry(context, { syncHubs: true });
+      }
+      const wf = getActiveWorkspaceFolder();
+      const hubPath =
+        currentPayload?.workspace?.localNotesHubPath ||
+        (wf ? path.join(wf.uri.fsPath, ".local-notes", "PROJECT_HUB.md") : "");
+      if (hubPath && fs.existsSync(hubPath)) {
+        await openFileSmart(hubPath);
+      } else {
+        vscode.window.showInformationMessage("Generating PROJECT_HUB.md…");
+        const p = await refreshTelemetry(context, { syncHubs: true });
+        if (p?.workspace?.localNotesHubPath && fs.existsSync(p.workspace.localNotesHubPath)) {
+          await openFileSmart(p.workspace.localNotesHubPath);
         }
       }
-      if (!targetUri) return;
-      await vscode.commands.executeCommand("vscode.openWith", targetUri, "default");
     }),
-    vscode.commands.registerCommand("agyMarkdown.openNativeArtifactViewer", async (uri) => {
-      const targetUri =
-        uri instanceof vscode.Uri
-          ? uri
-          : vscode.window.activeTextEditor
-          ? vscode.window.activeTextEditor.document.uri
-          : null;
-      if (!targetUri) return;
-      await openInNativeArtifactViewer(resolveRealFileInfo(targetUri));
+    vscode.commands.registerCommand("agyProjectHub.resumeSessionInCli", (itemOrSid) => {
+      resumeSessionInTerminal(itemOrSid);
     }),
-    vscode.commands.registerCommand("agyMarkdown.syncMpeTheme", () => {
-      syncMarkdownPreviewEnhanced(context.extensionPath);
-      vscode.window.showInformationMessage(
-        "Antigravity Markdown style synced to Markdown Preview Enhanced."
-      );
+    vscode.commands.registerCommand("agyProjectHub.copySessionId", async (itemOrSid) => {
+      const sid =
+        typeof itemOrSid === "string"
+          ? itemOrSid
+          : itemOrSid?.session?.id || currentPayload?.activeSessionId;
+      if (sid) {
+        await vscode.env.clipboard.writeText(sid);
+        vscode.window.setStatusBarMessage(`$(check) Copied Session ID: ${sid}`, 2500);
+      }
+    }),
+    vscode.commands.registerCommand("agyProjectHub.copyResumeCommand", async (itemOrSid) => {
+      const sid =
+        typeof itemOrSid === "string"
+          ? itemOrSid
+          : itemOrSid?.session?.id || currentPayload?.activeSessionId;
+      if (sid) {
+        const cmd = `agy --conversation ${sid}`;
+        await vscode.env.clipboard.writeText(cmd);
+        vscode.window.setStatusBarMessage(`$(check) Copied: ${cmd}`, 2500);
+      }
+    }),
+    vscode.commands.registerCommand("agyProjectHub.openArtifact", async (filePath) => {
+      if (filePath) {
+        await openFileSmart(filePath);
+      }
     })
   );
 
-  const cfg = vscode.workspace.getConfiguration("agyMarkdown");
-  if (cfg.get("syncMarkdownPreviewEnhanced", true)) {
-    syncMarkdownPreviewEnhanced(context.extensionPath);
-  }
-
-  return {
-    extendMarkdownIt(md) {
-      return extendMarkdownItWithAntigravity(md);
-    }
-  };
+  setupBackgroundWatchers(context);
+  refreshTelemetry(context, { syncHubs: true });
 }
 
-function deactivate() {}
+function deactivate() {
+  if (debounceTimer) clearTimeout(debounceTimer);
+  for (const w of fsWatchers) {
+    try {
+      w.close();
+    } catch (_) {}
+  }
+  fsWatchers = [];
+}
 
 module.exports = {
   activate,

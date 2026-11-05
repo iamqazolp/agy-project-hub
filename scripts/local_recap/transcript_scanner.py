@@ -45,10 +45,29 @@ def scan_brain_sessions(
     latest_write_ts: dict[str, str] = {}  # md_name -> latest write_file ISO timestamp
     transcript_subagent_parents: dict[str, str] = {}  # subagent_cid -> parent_cid
 
-    for conv_dir in brain_dir.iterdir():
-        if not conv_dir.is_dir():
-            continue
-        cid = conv_dir.name
+    brain_dirs_to_scan = [brain_dir]
+    if brain_dir.name == "brain" and brain_dir.parent.name in {"antigravity", "antigravity-cli"}:
+        sibling_name = "antigravity" if brain_dir.parent.name == "antigravity-cli" else "antigravity-cli"
+        sibling_brain = brain_dir.parent.parent / sibling_name / "brain"
+        if sibling_brain.exists() and sibling_brain != brain_dir:
+            brain_dirs_to_scan.append(sibling_brain)
+
+    conv_dirs_by_cid: dict[str, Path] = {}
+    for bdir in brain_dirs_to_scan:
+        for cand_dir in bdir.iterdir():
+            if not cand_dir.is_dir():
+                continue
+            cid = cand_dir.name
+            existing = conv_dirs_by_cid.get(cid)
+            if existing is None:
+                conv_dirs_by_cid[cid] = cand_dir
+            else:
+                ex_tr = existing / ".system_generated" / "logs" / "transcript.jsonl"
+                ca_tr = cand_dir / ".system_generated" / "logs" / "transcript.jsonl"
+                if ca_tr.exists() and (not ex_tr.exists() or ca_tr.stat().st_mtime > ex_tr.stat().st_mtime):
+                    conv_dirs_by_cid[cid] = cand_dir
+
+    for cid, conv_dir in conv_dirs_by_cid.items():
         db_info = sqlite_meta.get(cid, SqliteSessionMeta())
         if db_info.known_other_workspace:
             continue

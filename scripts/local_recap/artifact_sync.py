@@ -451,8 +451,9 @@ def sync_local_shortcuts(
 
 
 def ensure_vscode_editor_associations(workspace: Path | None = None) -> None:
-    """Ensure VS Code's `workbench.editorAssociations` maps `.local-notes/*.md` and `brain/**/*.md`
-    to `antigravity.artifactEditor` so clicking them opens the native Artifact Viewer with KaTeX math.
+    """Ensure VS Code's `workbench.editorAssociations` maps `.md` files (including `.local-notes/*.md`
+    and `brain/**/*.md`) to `antigravity.markdownReview` (`iamqazolp.agy-markdown-review`) instead of
+    the legacy `antigravity.artifactEditor`.
     """
     home = Path.home()
     candidates: list[Path] = []
@@ -460,49 +461,51 @@ def ensure_vscode_editor_associations(workspace: Path | None = None) -> None:
         app_support = home / "Library" / "Application Support"
         candidates = [
             app_support / "Code" / "User" / "settings.json",
-            app_support / "Antigravity" / "User" / "settings.json",
             app_support / "Cursor" / "User" / "settings.json",
         ]
     elif os.name == "nt":
         appdata = Path(os.environ.get("APPDATA", str(home / "AppData" / "Roaming")))
         candidates = [
             appdata / "Code" / "User" / "settings.json",
-            appdata / "Antigravity" / "User" / "settings.json",
             appdata / "Cursor" / "User" / "settings.json",
         ]
     else:
         cfg = home / ".config"
         candidates = [
             cfg / "Code" / "User" / "settings.json",
-            cfg / "Antigravity" / "User" / "settings.json",
             cfg / "Cursor" / "User" / "settings.json",
         ]
     if workspace and (workspace / ".vscode" / "settings.json").exists():
         candidates.append(workspace / ".vscode" / "settings.json")
 
+    desired = {
+        "*.md": "antigravity.markdownReview",
+        "**/*.md": "antigravity.markdownReview",
+        "**/.local-notes/*.md": "antigravity.markdownReview",
+        "**/.local-notes/**/*.md": "antigravity.markdownReview",
+        "**/.gemini/*/brain/**/*.md": "antigravity.markdownReview",
+    }
     for settings_path in candidates:
-        if not settings_path.parent.exists():
+        if not settings_path.exists():
             continue
-        data: dict[str, Any] = {}
-        if settings_path.exists():
-            try:
-                loaded = json.loads(settings_path.read_text(encoding="utf-8", errors="ignore"))
-                if isinstance(loaded, dict):
-                    data = loaded
-            except Exception:
+        try:
+            loaded = json.loads(settings_path.read_text(encoding="utf-8", errors="ignore"))
+            if not isinstance(loaded, dict):
                 continue
-        assoc = data.get("workbench.editorAssociations")
+        except Exception:
+            continue
+        assoc = loaded.get("workbench.editorAssociations")
         if not isinstance(assoc, dict):
             assoc = {}
         changed = False
-        for pattern in ("**/.local-notes/*.md", "**/.local-notes/**/*.md", "**/.gemini/*/brain/**/*.md"):
-            if assoc.get(pattern) != "antigravity.artifactEditor":
-                assoc[pattern] = "antigravity.artifactEditor"
+        for pattern, target_editor in desired.items():
+            if assoc.get(pattern) != target_editor:
+                assoc[pattern] = target_editor
                 changed = True
         if changed:
-            data["workbench.editorAssociations"] = assoc
+            loaded["workbench.editorAssociations"] = assoc
             try:
-                settings_path.write_text(json.dumps(data, indent=4) + "\n", encoding="utf-8", newline="\n")
+                settings_path.write_text(json.dumps(loaded, indent=4) + "\n", encoding="utf-8", newline="\n")
             except Exception:
                 pass
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install or update the `local-recap` skill (`agy-project-hub`) and VS Code / Crossnote styling."""
+"""Install or update the `agy-project-hub` skill and bundled `iamqazolp.agy-project-hub` VS Code extension."""
 
 from __future__ import annotations
 
@@ -7,12 +7,11 @@ import argparse
 import json
 import os
 import shutil
-import sys
 import time
 from pathlib import Path
 
 
-EXT_ID = "iamqazolp.agy-markdown-review"
+EXT_ID = "iamqazolp.agy-project-hub"
 EXT_VERSION = "1.0.0"
 EXT_DIR_NAME = f"{EXT_ID}-{EXT_VERSION}"
 
@@ -51,8 +50,8 @@ def _install_item(src: Path, dst: Path, use_symlink: bool = True) -> str:
 
 
 def install_vscode_extension(repo_root: Path) -> list[Path]:
-    """Install the bundled `vscode-extension` into `~/.vscode/extensions/` (and Cursor/Antigravity if present)
-    and pre-sync Markdown Preview Enhanced (`~/.local/state/crossnote/style.less`).
+    """Install the bundled `vscode-extension` (`iamqazolp.agy-project-hub`) into `~/.vscode/extensions/`
+    (and Cursor/Antigravity if present).
     """
     ext_src = repo_root / "vscode-extension"
     if not ext_src.exists():
@@ -118,90 +117,7 @@ def install_vscode_extension(repo_root: Path) -> list[Path]:
         )
         manifest_path.write_text(json.dumps(entries), encoding="utf-8", newline="\n")
 
-    try:
-        crossnote_dir = home / ".local" / "state" / "crossnote"
-        crossnote_dir.mkdir(parents=True, exist_ok=True)
-        css_text = (ext_src / "media" / "antigravity-markdown.css").read_text(encoding="utf-8")
-        style_less = crossnote_dir / "style.less"
-        begin_marker = "/* BEGIN ANTIGRAVITY MARKDOWN STYLE */"
-        end_marker = "/* END ANTIGRAVITY MARKDOWN STYLE */"
-        block = f"{begin_marker}\n{css_text}\n{end_marker}"
-        existing = style_less.read_text(encoding="utf-8", errors="ignore") if style_less.exists() else ""
-        if begin_marker in existing and end_marker in existing:
-            s_idx = existing.index(begin_marker)
-            e_idx = existing.index(end_marker) + len(end_marker)
-            existing = existing[:s_idx] + block + existing[e_idx:]
-        else:
-            existing = existing.rstrip() + "\n\n" + block + "\n"
-        style_less.write_text(existing, encoding="utf-8", newline="\n")
-    except Exception:
-        pass
-
     return installed_paths
-
-
-def configure_vscode_editor_associations() -> list[Path]:
-    """Configure VS Code's `workbench.editorAssociations` so `.local-notes/*.md` and `brain/**/*.md`
-    open in `antigravity.artifactEditor` (preserving native KaTeX math rendering).
-    """
-    home = Path.home()
-    candidates: list[Path] = []
-    if sys.platform == "darwin":
-        app_support = home / "Library" / "Application Support"
-        candidates = [
-            app_support / "Code" / "User" / "settings.json",
-            app_support / "Antigravity" / "User" / "settings.json",
-            app_support / "Cursor" / "User" / "settings.json",
-        ]
-    elif os.name == "nt":
-        appdata = Path(os.environ.get("APPDATA", str(home / "AppData" / "Roaming")))
-        candidates = [
-            appdata / "Code" / "User" / "settings.json",
-            appdata / "Antigravity" / "User" / "settings.json",
-            appdata / "Cursor" / "User" / "settings.json",
-        ]
-    else:
-        cfg = home / ".config"
-        candidates = [
-            cfg / "Code" / "User" / "settings.json",
-            cfg / "Antigravity" / "User" / "settings.json",
-            cfg / "Cursor" / "User" / "settings.json",
-        ]
-
-    desired = {
-        "**/.local-notes/*.md": "antigravity.artifactEditor",
-        "**/.local-notes/**/*.md": "antigravity.artifactEditor",
-        "**/.gemini/*/brain/**/*.md": "antigravity.artifactEditor",
-    }
-
-    updated: list[Path] = []
-    for settings_path in candidates:
-        if not settings_path.parent.exists():
-            continue
-        data: dict = {}
-        if settings_path.exists():
-            try:
-                loaded = json.loads(settings_path.read_text(encoding="utf-8", errors="ignore"))
-                if isinstance(loaded, dict):
-                    data = loaded
-            except Exception:
-                continue
-        assoc = data.get("workbench.editorAssociations")
-        if not isinstance(assoc, dict):
-            assoc = {}
-        changed = False
-        if assoc.get("*.md") == "antigravity.markdownReview":
-            assoc["*.md"] = "antigravity.artifactEditor"
-            changed = True
-        for pattern, editor_id in desired.items():
-            if assoc.get(pattern) != editor_id:
-                assoc[pattern] = editor_id
-                changed = True
-        if changed:
-            data["workbench.editorAssociations"] = assoc
-            settings_path.write_text(json.dumps(data, indent=4) + "\n", encoding="utf-8", newline="\n")
-        updated.append(settings_path)
-    return updated
 
 
 def register_lifecycle_hooks(config_root: Path, py_cmd: str, installed_script: Path) -> Path:
@@ -308,10 +224,7 @@ def main() -> None:
     for ext_dir in install_vscode_extension(repo_root):
         print(f"Installed VS Code extension: {ext_dir}")
 
-    for vs_cfg in configure_vscode_editor_associations():
-        print(f"Configured Antigravity Markdown associations: {vs_cfg}")
-
-    print("\nSkill 'agy-project-hub' (modular package) is ready with zero repo-to-skill drift!")
+    print("\nSkill 'agy-project-hub' and VS Code extension 'iamqazolp.agy-project-hub' are ready!")
 
 
 if __name__ == "__main__":
