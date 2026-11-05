@@ -495,9 +495,14 @@ def ensure_vscode_editor_associations(workspace: Path | None = None) -> None:
         if not isinstance(assoc, dict):
             assoc = {}
         changed = False
-        for pattern in ("**/.local-notes/*.md", "**/.local-notes/**/*.md", "**/.gemini/*/brain/**/*.md"):
-            if assoc.get(pattern) != "antigravity.artifactEditor":
-                assoc[pattern] = "antigravity.artifactEditor"
+        target_editor = (
+            "antigravity.artifactEditor"
+            if "Antigravity" in str(settings_path)
+            else "antigravity.markdownReview"
+        )
+        for pattern in ("*.md", "**/*.md", "**/.local-notes/*.md", "**/.local-notes/**/*.md", "**/.gemini/*/brain/**/*.md"):
+            if assoc.get(pattern) != target_editor:
+                assoc[pattern] = target_editor
                 changed = True
         if changed:
             data["workbench.editorAssociations"] = assoc
