@@ -478,13 +478,6 @@ def ensure_vscode_editor_associations(workspace: Path | None = None) -> None:
     if workspace and (workspace / ".vscode" / "settings.json").exists():
         candidates.append(workspace / ".vscode" / "settings.json")
 
-    desired = {
-        "*.md": "antigravity.markdownReview",
-        "**/*.md": "antigravity.markdownReview",
-        "**/.local-notes/*.md": "antigravity.markdownReview",
-        "**/.local-notes/**/*.md": "antigravity.markdownReview",
-        "**/.gemini/*/brain/**/*.md": "antigravity.markdownReview",
-    }
     for settings_path in candidates:
         if not settings_path.exists():
             continue
@@ -498,7 +491,12 @@ def ensure_vscode_editor_associations(workspace: Path | None = None) -> None:
         if not isinstance(assoc, dict):
             assoc = {}
         changed = False
-        for pattern, target_editor in desired.items():
+        target_editor = (
+            "antigravity.artifactEditor"
+            if "Antigravity" in str(settings_path)
+            else "antigravity.markdownReview"
+        )
+        for pattern in ("*.md", "**/*.md", "**/.local-notes/*.md", "**/.local-notes/**/*.md", "**/.gemini/*/brain/**/*.md"):
             if assoc.get(pattern) != target_editor:
                 assoc[pattern] = target_editor
                 changed = True
